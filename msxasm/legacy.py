@@ -5,8 +5,8 @@ v2 - Fixed instruction ordering and encoding.
 """
 
 import re
-import struct
 import sys
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 from msxasm.errors import MontagemError
@@ -27,7 +27,16 @@ class Z80Assembler:
         self.current_address = 0
         self.pass_no = 1
         self.max_passes = 2
+        # Search path do INCBIN, alimentado por msxasm.imagem a partir do
+        # -I da CLI. A resolucao tenta primeiro o diretorio do arquivo que
+        # contem a linha (como INCLUDE faz) e so depois estes caminhos.
         self.include_paths = []
+        self._incbin_cache: Dict[str, bytes] = {}
+        # Labels definidos POR ESTE assembler, separados de self.labels --
+        # que pode vir semeado com os simbolos do banco residente (ver
+        # msxasm.imagem.montar). Sem esta separacao, o mapa de bancos
+        # atribuiria os simbolos do residente a todo banco que os enxerga.
+        self.labels_proprios: set = set()
         self.arquivo_base = None
         self.linha_atual = None
         self.linhas_fonte = None
@@ -141,13 +150,23 @@ class Z80Assembler:
                                 )
                             labels_definidos_nesta_passagem[chave] = self._origem()
                             self.labels[chave] = self.current_address
+                            self.labels_proprios.add(chave)
                         stripped = rest if rest else ''
                         if not stripped:
                             i += 1
                             continue
                 
                 # EQU directive
-                eq = re.match(r'(\w+)\s+EQU\s+(.+)', stripped, re.IGNORECASE)
+                # Mesma classe de simbolo que _is_valid_label aceita, '@'
+                # incluido. Com '\w+' (que NAO inclui '@'), um simbolo de BSS
+                # escopado por '@@' -- 'MUSICA@@PTR EQU 0C000h', gerado pela
+                # cadeia labels->bss -- nao casava aqui, caia no caminho de
+                # instrucao e morria como 'Unknown instruction'. A invariante
+                # "'@' e caractere legal de simbolo" valia em dois dos tres
+                # lugares que precisam concordar (_is_valid_label e
+                # bss._RESERVA); este era o terceiro (achado da revisao final).
+                eq = re.match(r'([A-Za-z_][A-Za-z_0-9@]*)\s+EQU\s+(.+)',
+                              stripped, re.IGNORECASE)
                 if eq:
                     chave_equ = eq.group(1).upper()
                     if chave_equ in labels_definidos_nesta_passagem:
@@ -333,9 +352,19 @@ class Z80Assembler:
         # metade (labels) guardar a caixa original, entao 'ESPERA_m1'
         # (caixa mista, como a Tarefa 6 gera ao sufixar labels locais de
         # macro) ou 'loop' (100% minusculo) nunca resolviam.
-        for lbl, val in sorted(self.labels.items(), key=lambda x: -len(x[0])):
-            e = re.sub(r'\b' + re.escape(lbl) + r'\b', str(val), e)
-        for lbl, val in sorted(self.equates.items(), key=lambda x: -len(x[0])):
+        # UM laco so sobre labels + equates, ordenado por tamanho decrescente.
+        # Eram dois lacos separados, cada um ordenado por tamanho, mas TODOS os
+        # labels substituidos antes de QUALQUER equate -- e a ordenacao por
+        # tamanho e justamente o que impede um simbolo curto de comer o prefixo
+        # de um simbolo longo. Com o label 'MUSICA' e o equate 'MUSICA@@TICK'
+        # (o formato que um '@@' dentro de um bloco BSS produz), '\bMUSICA\b'
+        # casava DENTRO de 'MUSICA@@TICK' -- '@' nao e '\w', entao o '\b'
+        # dispara -- e a expressao virava '16384@@TICK'. So nao aparecia antes
+        # porque local escopado sempre acabava em self.labels, onde a ordenacao
+        # o protegia: um mecanismo quebrado coberto por outro, conforme o
+        # dicionario em que o simbolo caisse (achado da revisao final).
+        for lbl, val in sorted({**self.labels, **self.equates}.items(),
+                               key=lambda x: -len(x[0])):
             e = re.sub(r'\b' + re.escape(lbl) + r'\b', str(val), e)
         e = e.replace('$', str(self.current_address))
         # Intel hex (both 0xNN and NNNNh)
@@ -422,6 +451,59 @@ class Z80Assembler:
             val = self._eval(parts[1]) if len(parts) > 1 else 0
             self.output.extend([val & 0xFF] * cnt)
             self.current_address += cnt
+        elif dir == 'INCBIN':
+            dados = self._ler_incbin(arg)
+            self.output.extend(dados)
+            self.current_address += len(dados)
+
+    # ------------------------------------------------------------------ incbin
+    def _ler_incbin(self, arg: Optional[str]) -> bytes:
+        """Le o arquivo binario de um INCBIN e devolve seus bytes.
+
+        Antes disto o regex de diretiva reconhecia INCBIN mas _directive nao
+        tinha ramo para ela: a diretiva era ACEITA, nada era emitido, e TODO
+        label seguinte saia deslocado -- em silencio, com codigo de saida 0.
+        Era o unico ponto do assembler onde a regra de errors.py ("melhor
+        recusar montar do que produzir uma ROM que trava") foi abandonada.
+
+        A resolucao do caminho segue a mesma regra do INCLUDE (msxasm.include):
+        primeiro relativo ao arquivo que contem a linha -- o arquivo REAL,
+        vindo de _origem(), nao o fonte achatado -- e depois pelo search path
+        do -I. O conteudo e memorizado por caminho resolvido porque assemble()
+        roda duas passagens sobre o mesmo fonte: ler o arquivo duas vezes
+        abriria a porta para as duas passagens verem tamanhos diferentes e
+        para todo endereco depois do INCBIN divergir entre elas.
+        """
+        arquivo, linha = self._origem()
+        m = re.match(r'\s*"([^"]+)"\s*$', arg or '')
+        if not m:
+            raise MontagemError(
+                f'INCBIN espera um caminho entre aspas duplas, encontrado: '
+                f'{(arg or "").strip()!r}',
+                linha=linha, arquivo=arquivo,
+            )
+
+        alvo = m.group(1)
+        tentativas = []
+        base = Path(arquivo).parent if arquivo else Path(".")
+        for candidato in [base / alvo] + [Path(d) / alvo for d in self.include_paths]:
+            tentativas.append(str(candidato.parent))
+            if candidato.is_file():
+                chave = str(candidato.resolve())
+                if chave not in self._incbin_cache:
+                    try:
+                        self._incbin_cache[chave] = candidato.read_bytes()
+                    except OSError as e:
+                        raise MontagemError(
+                            f'INCBIN nao conseguiu ler "{alvo}": {e.strerror or e}',
+                            linha=linha, arquivo=arquivo,
+                        ) from None
+                return self._incbin_cache[chave]
+
+        raise MontagemError(
+            f'INCBIN nao encontrou "{alvo}" (procurado em: {", ".join(tentativas)})',
+            linha=linha, arquivo=arquivo,
+        )
 
     # ------------------------------------------------------------------ encode
     def _is_num(self, s: str) -> bool:
