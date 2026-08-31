@@ -76,14 +76,21 @@ O fonte do Pong é gerado por `build_pong.py`, que escreve `/tmp/pong_v22.asm` c
 ```bash
 WEBMSX=~/projects/WebMSX
 cp "$WEBMSX/tools/minz80asm.py" msxasm/legacy.py
+
+# Anote o que ja existe ANTES de rodar, para remover so o que voce criar.
+antes=$(mktemp); ls "$WEBMSX"/release/pong-ai-v24-*.rom > "$antes" 2>/dev/null
+
 python3 "$WEBMSX/tools/build_pong.py" >/dev/null
 cp /tmp/pong_v22.asm tests/fixtures/pong-v24.asm
 cp "$WEBMSX/release/pong-ai.rom" tests/fixtures/pong-v24.rom
 md5sum tests/fixtures/pong-v24.rom     # deve ser 03324e8f4febc0e537c9c808c6c33c00
-rm -f "$WEBMSX"/release/pong-ai-v24-17*.rom
+
+# Remove APENAS a ROM que esta execucao gerou.
+ls "$WEBMSX"/release/pong-ai-v24-*.rom | grep -vxF -f "$antes" | xargs -r rm -f
+rm -f "$antes"
 ```
 
-`build_pong.py` cria uma ROM com timestamp no nome a cada execução; a última linha remove o que esta etapa gerou, para não sujar o repositório antigo.
+`build_pong.py` cria uma ROM com timestamp no nome a cada execução. **Não use um glob para limpar:** `release/` guarda mais de uma dezena de builds v24 anteriores que não são seus, e `rm pong-ai-v24-17*.rom` apagaria todos. Compare com a listagem tirada antes e remova só a diferença.
 
 - [ ] **Step 4: Abrir exceção no `.gitignore` para os fixtures**
 
