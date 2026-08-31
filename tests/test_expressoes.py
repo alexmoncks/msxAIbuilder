@@ -66,3 +66,26 @@ def test_equ_com_referencia_adiante_a_label_resolve():
     # INICIO = 0x4000, FIM = 0x4000 + 2 (ld a,1) + 3 (ld hl,TAM) + 1 (ret) = 0x4006
     # TAM = FIM - INICIO = 6
     assert binario[3] == 0x06 and binario[4] == 0x00   # ld hl,6
+
+
+def test_equ_com_dollar_e_referencia_adiante_resolve_igual_nas_duas_passagens():
+    """Regressao recomendada na revisao: o revisor verificou empiricamente que
+    EQU referenciando '$' e seguro entre passagens (current_address e
+    identico na passagem 1 e na final, mesmo com referencia adiante antes do
+    '$'), mas nao havia teste nenhum disso. Como EQU agora reavalia em toda
+    passagem (guarda 'if self.pass_no == 1' removida), essa combinacao e
+    exatamente o que pode quebrar em silencio numa mudanca futura.
+    """
+    binario = montar(
+        "    org 4000h\n"
+        "    ld a,1\n"
+        "HERE EQU FIM - $\n"
+        "    ld hl,HERE\n"
+        "    ret\n"
+        "FIM:\n"
+        "    nop\n"
+    )
+    # '$' no ponto da linha EQU = 0x4002 (depois de 'ld a,1', 2 bytes).
+    # FIM = 0x4002 + 3 (ld hl,HERE) + 1 (ret) = 0x4006.
+    # HERE = FIM - $ = 0x4006 - 0x4002 = 4, resolvido so na passagem final.
+    assert binario[3] == 0x04 and binario[4] == 0x00   # ld hl,4

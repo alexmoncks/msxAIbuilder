@@ -63,3 +63,35 @@ def test_mnemonico_desconhecido_reporta_arquivo_e_linha(tmp_path):
     assert "ruim2.asm:3" in r.stderr
     assert "fooble" in r.stderr.lower()
     assert not (tmp_path / "y.rom").exists(), "nao deve escrever ROM em caso de erro"
+
+
+def test_db_sem_operando_reporta_arquivo_e_linha(tmp_path):
+    """Achado Important da rodada de correcao 1: _directive() e chamado fora
+    de qualquer try/except em assemble(), e _parse_nums(None) levanta um
+    TypeError cru ("object of type 'NoneType' has no len()") quando DB nao
+    tem operando. Isso escapava do "except MontagemError" da CLI e saia como
+    traceback bruto, sem arquivo nem linha.
+    """
+    fonte = tmp_path / "semoperando.asm"
+    fonte.write_text("    org 4000h\n    ld a,1\n    db\n")
+
+    r = rodar(str(fonte), "-o", str(tmp_path / "z.rom"))
+
+    assert r.returncode == 1
+    assert "semoperando.asm:3" in r.stderr
+    assert not (tmp_path / "z.rom").exists(), "nao deve escrever ROM em caso de erro"
+
+
+def test_dw_sem_operando_tambem_reporta_arquivo_e_linha(tmp_path):
+    """Mesma garantia para outra diretiva (DW), para provar que a correcao e
+    do caminho -- o try/except em torno de _directive() -- e nao um remendo
+    especifico para DB.
+    """
+    fonte = tmp_path / "semoperando2.asm"
+    fonte.write_text("    org 4000h\n    ld a,1\n    dw\n")
+
+    r = rodar(str(fonte), "-o", str(tmp_path / "w.rom"))
+
+    assert r.returncode == 1
+    assert "semoperando2.asm:3" in r.stderr
+    assert not (tmp_path / "w.rom").exists(), "nao deve escrever ROM em caso de erro"

@@ -96,7 +96,27 @@ class Z80Assembler:
                 # ORG/DW/DB/DS/INCBIN
                 d = re.match(r'(ORG|DB|DW|DS|INCBIN)\b(.+)?$', stripped, re.IGNORECASE)
                 if d:
-                    self._directive(d.group(1).upper(), d.group(2))
+                    try:
+                        self._directive(d.group(1).upper(), d.group(2))
+                    except MontagemError:
+                        # Erro real (ex.: simbolo inexistente dentro da
+                        # expressao da diretiva) ja vem com linha de origem
+                        # de _eval -- propaga direto, sem reembrulhar.
+                        raise
+                    except Exception as e:
+                        # Diretiva malformada (ex.: DB/DW sem operando vira
+                        # TypeError cru dentro de _parse_nums) escapava sem
+                        # arquivo nem linha, atravessando o "except
+                        # MontagemError" da CLI como traceback bruto. Guarda
+                        # o repr do erro original na mensagem -- rastro do
+                        # que de fato aconteceu, para nao confundir engano de
+                        # sintaxe do usuario com bug de implementacao.
+                        raise MontagemError(
+                            f"diretiva {d.group(1).upper()} mal formada em "
+                            f"{stripped!r}: {e!r}",
+                            linha=self.linha_atual,
+                            arquivo=str(self.arquivo_base) if self.arquivo_base else None,
+                        ) from e
                     i += 1
                     continue
                 
