@@ -165,3 +165,55 @@ def test_ponto_e_virgula_dentro_de_string_do_argumento_nao_e_cortado_como_coment
         '    MOSTRA "a;b"   ; comentario de verdade',
     ))
     assert textos(r) == ['db "a;b" ; comentario de verdade']
+
+
+# ---------------------------------------------------------------------------
+# Leva final de correcao: a linha de DEFINICAO da macro era o unico ponto da
+# cadeia fora da convencao corta_comentario de msxasm.texto (que bss.py e
+# mapper.py ja seguiam). O '(.*)$' do regex engolia o comentario inteiro como
+# lista de parametros.
+def test_comentario_na_linha_de_definicao_nao_vira_parametro():
+    r = expandir_macros(linhas(
+        "    MACRO CARREGA v      ; carrega v no acumulador",
+        "    ld a,v",
+        "    ENDM",
+        "    CARREGA 7",
+    ))
+    assert textos(r) == ["ld a,7"]
+
+
+def test_virgula_dentro_do_comentario_da_definicao_nao_inventa_parametro():
+    """O caso pior: com virgula no comentario (idiomatico em assembly) o
+    erro era INVENTADO -- 'macro CARREGA espera 2 argumento(s), recebeu 1'
+    para um fonte perfeitamente valido.
+    """
+    r = expandir_macros(linhas(
+        "    MACRO CARREGA v      ; carrega v, depois retorna",
+        "    ld a,v",
+        "    ret",
+        "    ENDM",
+        "    CARREGA 7",
+    ))
+    assert textos(r) == ["ld a,7", "ret"]
+
+
+def test_redefinicao_de_macro_e_erro_citando_as_duas_localizacoes():
+    """Coerente com label redefinido (Tarefa 5), EQU redefinido e simbolo BSS
+    duplicado (Tarefa 7). Antes a segunda definicao vencia em silencio: dois
+    modulos do runtime que definissem WAIT_VBLANK colidiam e o build ficava
+    com a definicao do modulo errado, sem erro nenhum.
+    """
+    with pytest.raises(MontagemError) as exc:
+        expandir_macros(linhas(
+            "    MACRO CARREGA",
+            "    ld a,7",
+            "    ENDM",
+            "    MACRO CARREGA",
+            "    ld b,7",
+            "    ENDM",
+            "    CARREGA",
+        ))
+    msg = str(exc.value)
+    assert "CARREGA" in msg
+    assert "t.asm:1" in msg      # primeira definicao
+    assert "t.asm:4" in msg      # segunda definicao, onde o erro e citado

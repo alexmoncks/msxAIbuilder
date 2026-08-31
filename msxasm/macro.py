@@ -26,7 +26,15 @@ Duas protecoes cuidam do resto do risco de uma substituicao textual:
    fora antes de qualquer substituicao; string literal e preservada intacta
    dentro do que resta.
 
-3. Comentario na linha de INVOCACAO (nao no corpo). Precisa ser cortado
+3. Comentario na linha de DEFINICAO e na linha de INVOCACAO. Na definicao,
+   'MACRO CARREGA v   ; carrega v' fazia o '(.*)$' do regex engolir o
+   comentario inteiro como lista de parametros: a substituicao por
+   `\bparam\b` nunca casava e o erro saia tres linhas adiante. Com virgula
+   no comentario (idiomatico em assembly) o erro era INVENTADO -- 'espera 2
+   argumento(s), recebeu 1' para um fonte perfeitamente valido. Era o unico
+   ponto da cadeia fora da convencao corta_comentario de msxasm.texto.
+
+4. Comentario na linha de INVOCACAO (nao no corpo). Precisa ser cortado
    ANTES de dividir os argumentos -- do contrario ele entra no valor do
    ultimo argumento (rodada de correcao 1 da Tarefa 6: 'GUARDA 0C000h ;
    salva estado' com o parametro usado no meio do corpo virava 'ld
@@ -63,11 +71,17 @@ class _Definicao:
 
 def _coletar(linhas: list[Linha]) -> tuple[dict[str, _Definicao], list[Linha]]:
     macros: dict[str, _Definicao] = {}
+    # nome -> "arquivo:linha" da primeira definicao, para citar as DUAS
+    # localizacoes na redefinicao (ver abaixo).
+    origem: dict[str, str] = {}
     resto: list[Linha] = []
     i = 0
 
     while i < len(linhas):
-        m = _MACRO.match(linhas[i].texto)
+        # Comentario cortado ANTES do match, como bss.py e mapper.py fazem --
+        # ver ponto 3 no docstring do modulo.
+        codigo, _ = corta_comentario(linhas[i].texto)
+        m = _MACRO.match(codigo)
         if not m:
             resto.append(linhas[i])
             i += 1
@@ -76,10 +90,24 @@ def _coletar(linhas: list[Linha]) -> tuple[dict[str, _Definicao], list[Linha]]:
         nome = m.group(1).upper()
         params = [p.strip() for p in m.group(2).split(",") if p.strip()]
         abertura = linhas[i]
+
+        if nome in origem:
+            # Coerencia com tres decisoes da mesma branch: label redefinido e
+            # erro (Tarefa 5), EQU redefinido e erro (Tarefa 7), simbolo BSS
+            # duplicado e erro (Tarefa 7). Sobrescrever em silencio deixava o
+            # cenario real quebrado do mesmo jeito: dois modulos do runtime
+            # incluidos no mesmo build que definam WAIT_VBLANK como macro
+            # colidem e o build fica com a definicao do modulo errado, sem
+            # erro nenhum.
+            raise MontagemError(
+                f"macro {nome} ja foi definida em {origem[nome]}",
+                linha=abertura.numero, arquivo=abertura.arquivo,
+            )
+
         corpo: list[Linha] = []
         i += 1
 
-        while i < len(linhas) and not _ENDM.match(linhas[i].texto):
+        while i < len(linhas) and not _ENDM.match(corta_comentario(linhas[i].texto)[0]):
             corpo.append(linhas[i])
             i += 1
 
@@ -90,6 +118,7 @@ def _coletar(linhas: list[Linha]) -> tuple[dict[str, _Definicao], list[Linha]]:
             )
 
         macros[nome] = _Definicao(nome, params, corpo)
+        origem[nome] = f"{abertura.arquivo}:{abertura.numero}"
         i += 1
 
     return macros, resto
