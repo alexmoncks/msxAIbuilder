@@ -68,6 +68,46 @@ def test_equ_com_referencia_adiante_a_label_resolve():
     assert binario[3] == 0x06 and binario[4] == 0x00   # ld hl,6
 
 
+def test_label_totalmente_minusculo_resolve():
+    """Rodada de correcao 1 da Tarefa 5: _eval maiusculiza a expressao antes
+    de substituir simbolos, mas a definicao de label guardava a chave com a
+    caixa original -- um label 100% minusculo nunca batia com a busca e
+    'assemble' morria com 'expressao nao pode ser avaliada'.
+    """
+    binario = montar("    org 4000h\nloop:\n    djnz loop\n")
+    assert binario[0] == 0x10          # DJNZ
+    assert binario[1] == 0xFE          # salta para si mesmo: 0x4000-(0x4000+2)
+
+
+def test_label_caixa_mista_no_formato_gerado_por_macro_resolve():
+    """Formato que o mecanismo de macros da Tarefa 6 produz ao sufixar um
+    label local por expansao: 'ESPERA_m1', com o sufixo '_m{contador}' em
+    minusculo. Antes da correcao, so o 'ESPERA' maiusculo batia depois do
+    .upper() em _eval, e o '_M1' maiusculizado nao encontrava a chave
+    'ESPERA_m1' guardada com o sufixo original em minusculo.
+    """
+    binario = montar("    org 4000h\nESPERA_m1:\n    djnz ESPERA_m1\n")
+    assert binario[0] == 0x10
+    assert binario[1] == 0xFE
+
+
+def test_equ_em_minusculas_resolve():
+    binario = montar("    org 4000h\ntempo equ 5\n    ld hl,tempo\n")
+    assert binario[0] == 0x21 and binario[1] == 0x05 and binario[2] == 0x00
+
+
+def test_constante_hex_terminada_em_0b_nao_e_corrompida_pela_normalizacao_de_caixa():
+    """Rede de regressao explicita para o comentario de _eval sobre
+    '0C00Bh': sem o lookbehind correto na normalizacao de literal binario,
+    essa constante virava 0x0C0 (192) em silencio depois da conversao hex.
+    A correcao de case-folding desta rodada nao mexeu nessas linhas, mas
+    este teste prova isso em vez de so confiar no golden (que tambem usa
+    '0C00Bh', em 'PAUSA equ 0C00Bh').
+    """
+    binario = montar("    org 4000h\n    ld hl,0C00Bh\n")
+    assert binario[0] == 0x21 and binario[1] == 0x0B and binario[2] == 0xC0
+
+
 def test_equ_com_dollar_e_referencia_adiante_resolve_igual_nas_duas_passagens():
     """Regressao recomendada na revisao: o revisor verificou empiricamente que
     EQU referenciando '$' e seguro entre passagens (current_address e

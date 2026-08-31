@@ -72,8 +72,15 @@ class Z80Assembler:
                     rest = stripped[col_pos+1:].strip()
                     if self._is_valid_label(label_part):
                         if label_part.upper() not in self.equates:
-                            if label_part not in self.labels:
-                                self.labels[label_part] = self.current_address
+                            # Chave guardada em maiuscula, como self.equates
+                            # ja faz (linha do EQU abaixo). _eval maiusculiza
+                            # a expressao inteira antes de substituir simbolos
+                            # -- se a definicao guardasse a caixa original, so
+                            # um label 100% maiusculo batia com essa busca.
+                            # Ver comentario longo em _eval() para o motivo
+                            # dessa correcao (rodada 1 da Tarefa 5).
+                            if label_part.upper() not in self.labels:
+                                self.labels[label_part.upper()] = self.current_address
                         stripped = rest if rest else ''
                         if not stripped:
                             i += 1
@@ -209,7 +216,14 @@ class Z80Assembler:
             return 0
         # Normalize
         e = expr.strip().upper()
-        # Replace labels
+        # Replace labels. self.labels e self.equates guardam a chave em
+        # maiuscula (ver definicao de label acima e do EQU abaixo) --
+        # justamente para bater com este 'e' ja maiusculizado. Um assembler
+        # Z80 nao distinguir caixa em simbolos e comportamento normal; o que
+        # nao era normal era so a metade (equates) fazer isso, e a outra
+        # metade (labels) guardar a caixa original, entao 'ESPERA_m1'
+        # (caixa mista, como a Tarefa 6 gera ao sufixar labels locais de
+        # macro) ou 'loop' (100% minusculo) nunca resolviam.
         for lbl, val in sorted(self.labels.items(), key=lambda x: -len(x[0])):
             e = re.sub(r'\b' + re.escape(lbl) + r'\b', str(val), e)
         for lbl, val in sorted(self.equates.items(), key=lambda x: -len(x[0])):

@@ -97,6 +97,36 @@ def test_dw_sem_operando_tambem_reporta_arquivo_e_linha(tmp_path):
     assert not (tmp_path / "w.rom").exists(), "nao deve escrever ROM em caso de erro"
 
 
+def test_local_em_caixa_mista_resolve_ponta_a_ponta(tmp_path):
+    """Rodada de correcao 1 da Tarefa 5: o mecanismo de macros da Tarefa 6
+    sufixa labels locais de cada expansao com '_m{contador}' em minusculo,
+    entao um '@@ESPERA' dentro de uma macro vira '@@ESPERA_m1' apos
+    expandir_locais, e o label final e de caixa mista
+    ('PSG_ON@@ESPERA_m1'). Antes da correcao de case-folding em _eval, so
+    labels 100% maiusculos resolviam -- toda macro com label local
+    quebraria a montagem. Este teste exercita a cadeia real da CLI
+    (expandir -> expandir_locais -> assemble), nao so expandir_locais
+    isolado.
+    """
+    fonte = tmp_path / "modulo.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "PSG_ON:\n"
+        "@@ESPERA_m1:\n"
+        "    djnz @@ESPERA_m1\n"
+        "    ret\n"
+    )
+    saida = tmp_path / "modulo.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--org", "0x4000", "--size", "8K")
+
+    assert r.returncode == 0, r.stderr
+    binario = saida.read_bytes()
+    assert binario[0] == 0x10          # DJNZ
+    assert binario[1] == 0xFE          # salta para si mesmo
+    assert binario[2] == 0xC9          # RET
+
+
 def test_erro_dentro_de_include_aponta_o_modulo(tmp_path):
     (tmp_path / "rt.asm").write_text("; cabecalho\n    ld hl,SUMIDO\n")
     principal = tmp_path / "jogo.asm"
