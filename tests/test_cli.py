@@ -349,6 +349,7 @@ def test_diretiva_malformada_dentro_de_include_aponta_o_modulo(tmp_path):
     assert r.returncode == 1
     assert "sprite.asm:2" in r.stderr, r.stderr
     assert "jogo.asm:2" not in r.stderr, r.stderr
+    assert not (tmp_path / "j.rom").exists(), "nao deve escrever ROM em caso de erro"
 
 
 def test_bss_vira_endereco_real_no_binario(tmp_path):

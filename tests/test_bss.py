@@ -69,3 +69,59 @@ def test_primeiro_bloco_sem_base_e_erro():
     with pytest.raises(MontagemError) as exc:
         extrair(linhas("    BSS", "V: DS 1", "    ENDBSS"))
     assert "base" in str(exc.value).lower()
+
+
+def test_simbolo_duplicado_e_insensivel_a_caixa():
+    """Rodada de correcao 1: a resolucao de label/equate e insensivel a
+    caixa desde a Tarefa 5 -- 'Estado' e 'ESTADO' sao o MESMO simbolo. Sem
+    normalizar a comparacao de duplicata, os dois modulos abaixo recebiam
+    enderecos de RAM DIFERENTES em silencio: e a classe exata de corrupcao
+    que o BSS existe para eliminar.
+    """
+    with pytest.raises(MontagemError) as exc:
+        extrair(linhas(
+            "    BSS 0C000h", "Estado: DS 1", "    ENDBSS",
+            "    BSS", "ESTADO: DS 1", "    ENDBSS",
+        ))
+    msg = str(exc.value)
+    assert "estado" in msg.lower()
+    assert "duplicad" in msg.lower()
+    assert "t.asm:2" in msg      # primeira declaracao ('Estado:')
+    assert "t.asm:5" in msg      # segunda declaracao ('ESTADO:'), onde o erro e citado
+
+
+def test_comentario_colado_sem_espaco_no_cabecalho_bss_nao_quebra():
+    """Rodada de correcao 1: 'BSS;continua' (sem espaco antes do ';') fazia
+    o '(\\S+)?' do _BSS engolir ';continua' inteiro como se fosse o
+    endereco base, e a conversao numerica escapava como ValueError cru em
+    vez de MontagemError. Aqui o bloco e o primeiro da lista (sem base
+    anterior), entao o resultado correto e o erro de "precisa base", nunca
+    um traceback.
+    """
+    with pytest.raises(MontagemError) as exc:
+        extrair(linhas("BSS;continua", "V: DS 1", "ENDBSS"))
+    assert "base" in str(exc.value).lower()
+
+
+def test_comentario_colado_sem_espaco_no_ds_e_apenas_comentario():
+    """Mesma classe de furo do teste acima, no outro ponto onde '(\\S+)' e
+    guloso: 'V: DS 1;comentario' (comentario colado, sem espaco) e uso
+    normal -- o assembler deve ler DS 1 e ignorar o comentario, nao
+    quebrar com ValueError cru.
+    """
+    _, mapa = extrair(linhas(
+        "BSS 0C000h",
+        "V: DS 1;comentario",
+        "ENDBSS",
+    ))
+    assert mapa == {"V": 0xC000}
+
+
+def test_numero_invalido_dentro_de_bss_e_montagem_error_nao_traceback():
+    """Guarda mais ampla pedida na revisao: qualquer entrada malformada
+    dentro de um bloco BSS (nao so as duas reproducoes especificas acima)
+    sai como MontagemError com arquivo e linha, nunca como ValueError cru.
+    """
+    with pytest.raises(MontagemError) as exc:
+        extrair(linhas("BSS ZZZZ", "V: DS 1", "ENDBSS"))
+    assert "invalido" in str(exc.value).lower()
