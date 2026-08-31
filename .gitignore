@@ -5,6 +5,9 @@
 *.rom
 *.zip
 
+# Excecao: a ROM golden e artefato de teste e precisa ser versionada.
+!tests/fixtures/*.rom
+
 # Saida do build.
 build/
 release/

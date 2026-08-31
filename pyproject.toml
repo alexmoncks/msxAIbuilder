@@ -1,0 +1,17 @@
+[project]
+name = "msxaibuilder"
+version = "0.1.0"
+description = "Construtor de ROMs MSX: assembler Z80, conversao de assets e runtime modular"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+
+[project.scripts]
+msxasm = "msxasm.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
