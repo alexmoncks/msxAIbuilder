@@ -9,6 +9,7 @@ from msxasm.include import expandir
 from msxasm.labels import expandir_locais
 from msxasm.legacy import Z80Assembler
 from msxasm.macro import expandir_macros
+from msxasm.source import Linha
 
 PREENCHIMENTO = 0xFF
 
@@ -44,10 +45,23 @@ def main(argv: list[str] | None = None) -> int:
         # '@@espera_m1', e so entao expandir_locais aplica o escopo global
         # sobre o texto ja sufixado. Invertida, '@@' seria escopado antes
         # de o sufixo por expansao existir, e duas invocacoes da mesma
-        # macro colidiriam. A Tarefa 7 acrescenta a extracao de BSS depois.
+        # macro colidiriam. A extracao de BSS vem por ultimo: um bloco BSS
+        # pode vir de dentro de um INCLUDE e pode ser gerado por macro, entao
+        # so faz sentido procurar por ele depois que as duas expansoes
+        # anteriores ja achataram o fonte inteiro.
         linhas = expandir(args.fonte, args.include_path)
         linhas = expandir_macros(linhas)
         linhas = expandir_locais(linhas)
+
+        from msxasm.bss import extrair
+
+        linhas, ram = extrair(linhas)
+        equates = [
+            Linha(texto=f"{nome} EQU 0{endereco:04X}h", arquivo="<bss>", numero=n)
+            for n, (nome, endereco) in enumerate(ram.items(), start=1)
+        ]
+        linhas = equates + linhas
+
         asm.linhas_fonte = linhas
         binario = asm.assemble("\n".join(l.texto for l in linhas))
 

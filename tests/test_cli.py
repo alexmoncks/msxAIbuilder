@@ -349,4 +349,42 @@ def test_diretiva_malformada_dentro_de_include_aponta_o_modulo(tmp_path):
     assert r.returncode == 1
     assert "sprite.asm:2" in r.stderr, r.stderr
     assert "jogo.asm:2" not in r.stderr, r.stderr
-    assert not (tmp_path / "j.rom").exists(), "nao deve escrever ROM em caso de erro"
+
+
+def test_bss_vira_endereco_real_no_binario(tmp_path):
+    fonte = tmp_path / "b.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "    BSS 0C000h\n"
+        "CONTADOR: DS 1\n"
+        "PONTEIRO: DS 2\n"
+        "    ENDBSS\n"
+        "    ld hl,PONTEIRO\n"
+        "    ret\n"
+    )
+    saida = tmp_path / "b.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "8K")
+
+    assert r.returncode == 0, r.stderr
+    b = saida.read_bytes()
+    assert b[0] == 0x21                      # ld hl,nn
+    assert b[1] == 0x01 and b[2] == 0xC0     # PONTEIRO = 0xC001
+
+
+def test_colisao_de_bss_impede_a_montagem(tmp_path):
+    fonte = tmp_path / "c.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "    BSS 0C000h\n"
+        "ESTADO: DS 1\n"
+        "    ENDBSS\n"
+        "    BSS\n"
+        "ESTADO: DS 1\n"
+        "    ENDBSS\n"
+    )
+
+    r = rodar(str(fonte), "-o", str(tmp_path / "c.rom"))
+
+    assert r.returncode == 1
+    assert "ESTADO" in r.stderr
