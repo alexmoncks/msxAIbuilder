@@ -27,11 +27,13 @@ class Z80Assembler:
         self.current_address = 0
         self.pass_no = 1
         self.max_passes = 2
-        
+        self.include_paths = []
+        self.arquivo_base = None
+        self.linha_atual = None
+
     def assemble(self, source: str) -> bytearray:
         lines = source.split('\n')
-        
-        self.erros = []
+
         for self.pass_no in range(1, self.max_passes + 1):
             self.output = bytearray()
             self.current_address = 0
@@ -79,8 +81,15 @@ class Z80Assembler:
                 # EQU directive
                 eq = re.match(r'(\w+)\s+EQU\s+(.+)', stripped, re.IGNORECASE)
                 if eq:
-                    if self.pass_no == 1:
-                        self.equates[eq.group(1).upper()] = self._eval(eq.group(2))
+                    # Reavaliar em TODA passagem, nao so na primeira. So assim
+                    # dois casos ficam corretos ao mesmo tempo: referencia
+                    # adiante a um label (ex.: TAM EQU FIM - INICIO, com FIM
+                    # definido depois) resolve na passagem final, quando FIM
+                    # ja existe em self.labels; e simbolo que nunca existe
+                    # vira MontagemError na passagem final, em vez de gravar 0
+                    # em silencio para sempre porque _eval so levanta na
+                    # ultima passagem e EQU antes so era avaliado na primeira.
+                    self.equates[eq.group(1).upper()] = self._eval(eq.group(2))
                     i += 1
                     continue
                 
@@ -98,23 +107,26 @@ class Z80Assembler:
                     self.current_address += len(code)
                 except MontagemError:
                     # Simbolo inexistente na ultima passagem: erro real, nao
-                    # instrucao mal-codificada. Nao vira string acumulada em
-                    # self.erros para sair como SystemExit -- propaga direto
-                    # como MontagemError, com a linha de origem.
+                    # instrucao mal-codificada. Propaga direto como
+                    # MontagemError, com a linha de origem.
                     raise
                 except Exception as e:
-                    msg = str(e)
                     if self.pass_no == self.max_passes:
                         # No passe final isto NAO e aviso: e uma instrucao que
-                        # nao entrou no binario. Seguir em frente foi o que
-                        # produziu ROMs com buracos silenciosos.
-                        self.erros.append(f'{stripped} -> {msg}')
+                        # nao entrou no binario -- por exemplo, mnemonico
+                        # desconhecido (_encode levanta ValueError puro para
+                        # esse caso). Seguir em frente foi o que produziu ROMs
+                        # com buracos silenciosos; virava SystemExit sem
+                        # arquivo nem linha. Agora sai como qualquer outra
+                        # falha de montagem: MontagemError com arquivo:linha.
+                        raise MontagemError(
+                            str(e),
+                            linha=self.linha_atual,
+                            arquivo=str(self.arquivo_base) if self.arquivo_base else None,
+                        ) from e
                     self.current_address += self._guess_size(stripped)
                 i += 1
 
-        if self.erros:
-            raise SystemExit('MONTAGEM FALHOU: instrucoes nao codificadas:\n  '
-                             + '\n  '.join(self.erros))
         return self.output
 
     # ------------------------------------------------------------------ helpers
@@ -171,6 +183,7 @@ class Z80Assembler:
                     f"expressao nao pode ser avaliada: {expr!r} "
                     f"(apos substituicao de simbolos: {e!r})",
                     linha=getattr(self, "linha_atual", None),
+                    arquivo=str(self.arquivo_base) if self.arquivo_base else None,
                 )
             return 0
 
