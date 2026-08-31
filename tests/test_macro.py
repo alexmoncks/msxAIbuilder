@@ -146,3 +146,22 @@ def test_sufixo_de_label_local_nao_substitui_dentro_de_string_literal():
         "    NOTA",
     ))
     assert textos(r) == ['db "vai para @@x"']
+
+
+# ---------------------------------------------------------------------------
+# Rodada de correcao 1: comentario na linha de INVOCACAO (nao no corpo) era
+# cortado tarde demais -- ou nunca era cortado, e _dividir_args rodava sobre
+# a linha inteira. Um ';' de verdade depois dos argumentos entrava no valor
+# do ultimo argumento. Corrigido cortando o comentario da invocacao ANTES de
+# dividir os argumentos (mesma _corta_comentario do corpo, um nivel acima).
+# Os testes de bytes montados (comentario no meio e no fim da linha do
+# corpo) estao em tests/test_cli.py, porque so a montagem completa prova o
+# byte final -- ver os dois testes la para o caso que quebrava de verdade.
+def test_ponto_e_virgula_dentro_de_string_do_argumento_nao_e_cortado_como_comentario():
+    r = expandir_macros(linhas(
+        "    MACRO MOSTRA txt",
+        "    db txt",
+        "    ENDM",
+        '    MOSTRA "a;b"   ; comentario de verdade',
+    ))
+    assert textos(r) == ['db "a;b" ; comentario de verdade']

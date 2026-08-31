@@ -163,6 +163,71 @@ def test_macro_invocada_duas_vezes_monta_sem_erro_de_label_redefinido(tmp_path):
     assert binario[6:9] == bytes([0x10, 0xFE, 0xC9])
 
 
+def test_macro_com_parametro_no_meio_da_linha_e_comentario_na_invocacao_monta_bytes_certos(tmp_path):
+    """Rodada de correcao 1 da Tarefa 6.
+
+    Reproduz o caso relatado: com o parametro usado no MEIO da linha do
+    corpo (nao no fim), o comentario da linha de invocacao entrava no valor
+    do argumento antes da correcao -- 'GUARDA 0C000h   ; salva estado'
+    expandia para 'ld (0C000h   ; salva estado),a', e a montagem falhava com
+    um erro interno de Python ('not enough values to unpack'), sem relacao
+    nenhuma com o texto escrito. Aqui a montagem tem que completar e os
+    bytes tem que estar corretos -- nao so ausencia de excecao.
+    """
+    fonte = tmp_path / "guarda.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "    MACRO GUARDA dst\n"
+        "    ld (dst),a\n"
+        "    ENDM\n"
+        "    ld a,1\n"
+        "    GUARDA 0C000h   ; salva estado\n"
+        "    ret\n"
+    )
+    saida = tmp_path / "guarda.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--org", "0x4000", "--size", "8K")
+
+    assert r.returncode == 0, r.stderr
+    binario = saida.read_bytes()
+    # ld a,1 / ld (0C000h),a / ret
+    assert binario[0:2] == bytes([0x3E, 0x01])
+    assert binario[2:5] == bytes([0x32, 0x00, 0xC0])
+    assert binario[5] == 0xC9
+
+
+def test_macro_com_parametro_no_fim_da_linha_e_comentario_na_invocacao_monta_bytes_certos(tmp_path):
+    """Antes da correcao, este caso 'passava' so por acidente: o parametro
+    usado no FIM da linha do corpo fazia o comentario colado ficar no fim
+    do valor substituido, e como esse era o ultimo token da linha expandida,
+    o corte de comentario em legacy.py ainda separava tudo corretamente por
+    coincidencia de posicao -- nao porque a substituicao estivesse certa.
+    Preservado como teste de regressao, verificando os BYTES montados (nao
+    so a ausencia de excecao, que e o que fazia esse caso parecer correto
+    antes da correcao).
+    """
+    fonte = tmp_path / "vdp.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "    MACRO VDP_REG reg,valor\n"
+        "    ld a,valor\n"
+        "    ld c,reg\n"
+        "    ENDM\n"
+        "    VDP_REG 7,0x0F   ; liga sprites\n"
+        "    ret\n"
+    )
+    saida = tmp_path / "vdp.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--org", "0x4000", "--size", "8K")
+
+    assert r.returncode == 0, r.stderr
+    binario = saida.read_bytes()
+    # ld a,0x0F / ld c,7 / ret
+    assert binario[0:2] == bytes([0x3E, 0x0F])
+    assert binario[2:4] == bytes([0x0E, 0x07])
+    assert binario[4] == 0xC9
+
+
 def test_locais_identicos_sob_globais_diferentes_continuam_validos(tmp_path):
     """Rodada de correcao 2 da Tarefa 5: a deteccao de label global
     redefinido NAO pode confundir '@@LOOP' definido sob 'PSG_ON:' com

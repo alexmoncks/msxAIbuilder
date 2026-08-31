@@ -23,6 +23,14 @@ Duas protecoes cuidam do resto do risco de uma substituicao textual:
    fora antes de qualquer substituicao; string literal e preservada intacta
    dentro do que resta (mesma tecnica de msxasm.labels: re.split/findall em
    torno de '"..."').
+
+3. Comentario na linha de INVOCACAO (nao no corpo). Precisa ser cortado
+   ANTES de dividir os argumentos -- do contrario ele entra no valor do
+   ultimo argumento (rodada de correcao 1 da Tarefa 6: 'GUARDA 0C000h ;
+   salva estado' com o parametro usado no meio do corpo virava 'ld
+   (0C000h   ; salva estado),a' e quebrava com um erro interno de Python,
+   sem relacao nenhuma com o texto escrito). E preservado -- anexado ao
+   final da primeira linha expandida -- em vez de descartado.
 """
 import re
 
@@ -136,7 +144,12 @@ def expandir_macros(linhas: list[Linha]) -> list[Linha]:
     contador = 0
 
     for linha in corpo:
-        bruto = linha.texto.strip()
+        # Corta o comentario da linha de INVOCACAO antes de dividir os
+        # argumentos -- ver ponto 3 no docstring do modulo. Reusa
+        # _corta_comentario (mesma funcao usada no corpo), so que aqui um
+        # nivel acima: na linha que CHAMA a macro, nao dentro dela.
+        codigo_invocacao, comentario_invocacao = _corta_comentario(linha.texto)
+        bruto = codigo_invocacao.strip()
         primeira = bruto.split()[0].upper() if bruto else ""
 
         if primeira not in macros:
@@ -179,13 +192,29 @@ def expandir_macros(linhas: list[Linha]) -> list[Linha]:
         def _substitui_locais(parte: str, _sufixo=sufixo) -> str:
             return _LOCAL.sub(lambda mm: f"@@{mm.group(1)}{_sufixo}", parte)
 
+        expandidas: list[Linha] = []
         for corpo_linha in definicao.corpo:
             codigo, comentario = _corta_comentario(corpo_linha.texto)
             codigo = _fora_de_strings(codigo, _substitui_params)
             codigo = _fora_de_strings(codigo, _substitui_locais)
 
-            resultado.append(
+            expandidas.append(
                 Linha(texto=codigo + comentario, arquivo=linha.arquivo, numero=linha.numero)
             )
+
+        if comentario_invocacao and expandidas:
+            # Preserva o comentario da invocacao -- e informacao que a
+            # pessoa escreveu de proposito, nao lixo para descartar.
+            # Anexado ao final da primeira linha expandida; se essa linha
+            # ja tiver comentario proprio, o texto so se junta ao mesmo
+            # comentario (tudo apos o primeiro ';' ja e comentario).
+            primeira_expandida = expandidas[0]
+            expandidas[0] = Linha(
+                texto=f"{primeira_expandida.texto} {comentario_invocacao}",
+                arquivo=primeira_expandida.arquivo,
+                numero=primeira_expandida.numero,
+            )
+
+        resultado.extend(expandidas)
 
     return resultado
