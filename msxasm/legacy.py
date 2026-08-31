@@ -169,7 +169,10 @@ class Z80Assembler:
                   f"  use JP em vez de JR", file=sys.stderr)
 
     def _is_valid_label(self, s: str) -> bool:
-        return bool(re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', s))
+        # '@' entra aqui para reconhecer labels locais ja expandidos por
+        # msxasm.labels.expandir_locais (ex.: 'VDP_INIT@@loop'). Em _eval,
+        # re.escape(lbl) ja cuida do '@' na substituicao -- nada muda la.
+        return bool(re.match(r'^[A-Za-z_][A-Za-z_0-9@]*$', s))
 
     def _origem(self) -> tuple:
         """Mapeia linha_atual (indice no fonte achatado, apos INCLUDE) de

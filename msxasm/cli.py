@@ -6,6 +6,7 @@ from pathlib import Path
 
 from msxasm.errors import MontagemError
 from msxasm.include import expandir
+from msxasm.labels import expandir_locais
 from msxasm.legacy import Z80Assembler
 
 PREENCHIMENTO = 0xFF
@@ -37,7 +38,11 @@ def main(argv: list[str] | None = None) -> int:
         asm.include_paths = list(args.include_path)
         asm.arquivo_base = args.fonte
 
+        # Cadeia de preparo do fonte, antes da montagem. Tarefa 6 insere
+        # expandir_macros() aqui entre expandir() e expandir_locais(); a
+        # Tarefa 7 acrescenta a extracao de BSS depois.
         linhas = expandir(args.fonte, args.include_path)
+        linhas = expandir_locais(linhas)
         asm.linhas_fonte = linhas
         binario = asm.assemble("\n".join(l.texto for l in linhas))
 
