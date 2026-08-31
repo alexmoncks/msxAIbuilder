@@ -1,0 +1,21 @@
+msxAIbuilder
+Copyright 2026 Alex Marra
+
+Este produto inclui software desenvolvido por Alex Marra,
+licenciado sob a Apache License, Version 2.0.
+
+---
+
+Dependencia de teste, NAO redistribuida por este repositorio:
+
+  WebMSX — Copyright Paulo Augusto Peccin
+  https://github.com/ppeccin/WebMSX
+
+O WebMSX e referenciado como submodule git em vendor/webmsx. O git
+guarda apenas um ponteiro de commit; nenhum arquivo do WebMSX e copiado
+para dentro deste repositorio ou distribuido com ele.
+
+O WebMSX e usado exclusivamente como ambiente de execucao para os testes
+automatizados (o Z80 e o VDP do emulador rodam as ROMs geradas em modo
+headless). Nenhum codigo do WebMSX entra nas ROMs produzidas por esta
+ferramenta.

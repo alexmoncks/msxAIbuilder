@@ -1,0 +1,4 @@
+[submodule "vendor/webmsx"]
+	path = vendor/webmsx
+	url = https://github.com/alexmoncks/WebMSX.git
+	shallow = true

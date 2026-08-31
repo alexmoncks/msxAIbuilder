@@ -1,0 +1,36 @@
+# ROMs — nunca versionadas, geradas ou nao.
+# O repositorio guarda o que PRODUZ a ROM (fontes .asm, arte, MIDI),
+# nunca o binario. Uma ROM no git envelhece em silencio: ninguem sabe
+# de qual commit dos fontes ela saiu.
+*.rom
+*.zip
+
+# Saida do build.
+build/
+release/
+
+# WebMSX entra como submodule em vendor/webmsx — o git guarda so o
+# ponteiro de commit. Qualquer OUTRA coisa em vendor/ e download local
+# e nao sobe.
+/vendor/*
+!/vendor/webmsx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node (harness de teste)
+node_modules/
+
+# Editores
+.idea/
+.vscode/
+*.swp
+
+# Sistema
+.DS_Store
