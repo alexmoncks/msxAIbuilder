@@ -73,3 +73,56 @@ def test_arquivo_ausente_reporta_onde_foi_pedido(tmp_path):
     msg = str(exc.value)
     assert "sumiu.asm" in msg
     assert "p.asm:2" in msg
+
+
+def test_inclusao_em_diamante_inclui_uma_vez_sem_falso_positivo_de_ciclo(tmp_path):
+    """a inclui b e c; b e c incluem o mesmo d. Nao e ciclo -- e dependencia
+    compartilhada (o caso comum de um runtime: varios modulos incluindo o
+    mesmo modulo base). O algoritmo separa "concluidos" (guarda de
+    repeticao) de "em andamento na pilha atual" (deteccao de ciclo); esta
+    interacao e exatamente a sutileza que ja produziu um bug real nesta
+    tarefa (ciclo verdadeiro nao detectado), entao o diamante -- que exercita
+    o mesmo par de estruturas sem ser um ciclo -- precisa de rede propria.
+    """
+    (tmp_path / "d.asm").write_text("    ld a,4\n    ld b,4\n")
+    (tmp_path / "b.asm").write_text('    INCLUDE "d.asm"\n')
+    (tmp_path / "c.asm").write_text('    INCLUDE "d.asm"\n')
+    principal = tmp_path / "a.asm"
+    principal.write_text('    INCLUDE "b.asm"\n    INCLUDE "c.asm"\n')
+
+    linhas = expandir(principal, [])  # nao pode levantar MontagemError de ciclo
+
+    linhas_a = [l for l in linhas if "ld a,4" in l.texto]
+    linhas_b = [l for l in linhas if "ld b,4" in l.texto]
+    assert len(linhas_a) == 1, "d.asm deve entrar uma unica vez, via b ou c"
+    assert len(linhas_b) == 1, "d.asm deve entrar uma unica vez, via b ou c"
+    assert linhas_a[0].arquivo.endswith("d.asm")
+    assert linhas_a[0].numero == 1
+    assert linhas_b[0].arquivo.endswith("d.asm")
+    assert linhas_b[0].numero == 2
+
+
+def test_inclusao_em_diamante_dois_niveis_inclui_uma_vez_sem_falso_positivo_de_ciclo(tmp_path):
+    """Diamante mais fundo: e e alcancado por dois ramos em profundidades
+    DIFERENTES -- a->b->d->e (profundidade 3) e a->f->e (profundidade 2) --
+    e alem disso d tambem e um diamante raso (incluido por b e por c). O bug
+    original de deteccao de ciclo so se manifestava a partir do segundo
+    nivel de recursao, entao um diamante raso sozinho nao bastaria como rede
+    de regressao para essa classe de erro.
+    """
+    (tmp_path / "e.asm").write_text("    ld a,5\n")
+    (tmp_path / "d.asm").write_text('    INCLUDE "e.asm"\n')
+    (tmp_path / "b.asm").write_text('    INCLUDE "d.asm"\n')
+    (tmp_path / "c.asm").write_text('    INCLUDE "d.asm"\n')
+    (tmp_path / "f.asm").write_text('    INCLUDE "e.asm"\n')
+    principal = tmp_path / "a.asm"
+    principal.write_text(
+        '    INCLUDE "b.asm"\n    INCLUDE "c.asm"\n    INCLUDE "f.asm"\n'
+    )
+
+    linhas = expandir(principal, [])  # nao pode levantar MontagemError de ciclo
+
+    linhas_e = [l for l in linhas if "ld a,5" in l.texto]
+    assert len(linhas_e) == 1, "e.asm deve entrar uma unica vez, apesar de dois ramos"
+    assert linhas_e[0].arquivo.endswith("e.asm")
+    assert linhas_e[0].numero == 1
