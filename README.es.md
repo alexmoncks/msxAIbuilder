@@ -62,6 +62,7 @@ p.build("game.asm")
 | `msxasm` | Ensamblador Z80. `INCLUDE`, macros, `BSS` con asignación de RAM, bancos de MegaROM. No sabe qué es un sprite. |
 | `msxbuild` | Conversión de recursos, montaje del proyecto, runtime `.asm`. No sabe codificar Z80. |
 | `games/` | Los cartuchos. [`example/`](games/example/) ensambla y funciona hoy; `pong/` espera el port. |
+| [`roms/`](roms/) | Las ROMs jugables. Hoy: Pong AI v24, 16 KB, MSX2. |
 
 ## MegaROM
 

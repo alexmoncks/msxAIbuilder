@@ -8,6 +8,10 @@
 # Excecao: a ROM golden e artefato de teste e precisa ser versionada.
 !tests/fixtures/*.rom
 
+# Excecao: roms/ guarda o que EFETIVAMENTE RODA -- as ROMs jogaveis, separadas
+# das dezenas de builds de teste. Ver roms/README.md.
+!roms/*.rom
+
 # Saida do build.
 build/
 release/
