@@ -46,7 +46,14 @@ class Z80Assembler:
             # dict e reiniciado por passagem (rodada de correcao 2 da
             # Tarefa 5).
             labels_definidos_nesta_passagem: Dict[str, Tuple[Optional[str], Optional[int]]] = {}
-            
+            # Mesma ideia, para EQU (Tarefa 7, requisito adicional): rastreia
+            # simbolos EQU ja definidos NESTA passagem, para detectar colisao
+            # com um label (ou com outro EQU) ANTES que o `if label_part.upper()
+            # not in self.equates` abaixo descarte o label em silencio. self.equates
+            # (como self.labels) persiste entre passagens de proposito -- so este
+            # dict e reiniciado por passagem.
+            equates_definidos_nesta_passagem: Dict[str, Tuple[Optional[str], Optional[int]]] = {}
+
             i = 0
             while i < len(lines):
                 line = lines[i]
@@ -79,6 +86,29 @@ class Z80Assembler:
                     label_part = stripped[:col_pos].strip()
                     rest = stripped[col_pos+1:].strip()
                     if self._is_valid_label(label_part):
+                        chave_rotulo = label_part.upper()
+                        if chave_rotulo in equates_definidos_nesta_passagem:
+                            # Buraco encontrado na revisao da Tarefa 7 (BSS):
+                            # um bloco BSS vira um EQU injetado na frente do
+                            # fonte inteiro (msxasm/bss.py + cli.py). Sem esta
+                            # checagem, o `if label_part.upper() not in
+                            # self.equates` logo abaixo simplesmente pula o
+                            # bloco que grava o label -- o EQU vence em
+                            # SILENCIO, o label some, e todo salto que
+                            # apontava para ele fica orfao sem erro nenhum.
+                            # E exatamente a classe de corrupcao que o BSS
+                            # existe para eliminar (enderecos de RAM
+                            # colidindo sem aviso), entrando pela porta dos
+                            # fundos via nome de simbolo em vez de endereco.
+                            arquivo, linha = self._origem()
+                            outro_local = self._formatar_origem(
+                                *equates_definidos_nesta_passagem[chave_rotulo]
+                            )
+                            raise MontagemError(
+                                f"label '{chave_rotulo}' colide com um EQU "
+                                f"ja definido em {outro_local}",
+                                linha=linha, arquivo=arquivo,
+                            )
                         if label_part.upper() not in self.equates:
                             # Chave guardada em maiuscula, como self.equates
                             # ja faz (linha do EQU abaixo). _eval maiusculiza
@@ -119,6 +149,39 @@ class Z80Assembler:
                 # EQU directive
                 eq = re.match(r'(\w+)\s+EQU\s+(.+)', stripped, re.IGNORECASE)
                 if eq:
+                    chave_equ = eq.group(1).upper()
+                    if chave_equ in labels_definidos_nesta_passagem:
+                        # Mesmo buraco do lado do label (ver comentario
+                        # acima), mas na ordem inversa: um EQU declarado
+                        # depois de um label de mesmo nome. Nao acontece com
+                        # os EQU gerados pelo BSS (sempre injetados na frente
+                        # do fonte inteiro -- Passo 5 da Tarefa 7), mas um
+                        # EQU escrito a mao mais adiante no arquivo cai aqui.
+                        arquivo, linha = self._origem()
+                        outro_local = self._formatar_origem(
+                            *labels_definidos_nesta_passagem[chave_equ]
+                        )
+                        raise MontagemError(
+                            f"EQU '{chave_equ}' colide com o label "
+                            f"ja definido em {outro_local}",
+                            linha=linha, arquivo=arquivo,
+                        )
+                    if chave_equ in equates_definidos_nesta_passagem:
+                        # Dois EQU DIFERENTES (linhas diferentes) com o mesmo
+                        # nome dentro da MESMA passagem -- redefinicao de
+                        # verdade, nao a reavaliacao normal do mesmo EQU a
+                        # cada passagem (comentario abaixo). Ex.: um simbolo
+                        # de BSS que colide com um EQU escrito a mao em
+                        # outro modulo.
+                        arquivo, linha = self._origem()
+                        outro_local = self._formatar_origem(
+                            *equates_definidos_nesta_passagem[chave_equ]
+                        )
+                        raise MontagemError(
+                            f"EQU '{chave_equ}' ja foi definido em {outro_local}",
+                            linha=linha, arquivo=arquivo,
+                        )
+                    equates_definidos_nesta_passagem[chave_equ] = self._origem()
                     # Reavaliar em TODA passagem, nao so na primeira. So assim
                     # dois casos ficam corretos ao mesmo tempo: referencia
                     # adiante a um label (ex.: TAM EQU FIM - INICIO, com FIM
@@ -127,7 +190,7 @@ class Z80Assembler:
                     # vira MontagemError na passagem final, em vez de gravar 0
                     # em silencio para sempre porque _eval so levanta na
                     # ultima passagem e EQU antes so era avaliado na primeira.
-                    self.equates[eq.group(1).upper()] = self._eval(eq.group(2))
+                    self.equates[chave_equ] = self._eval(eq.group(2))
                     i += 1
                     continue
                 
