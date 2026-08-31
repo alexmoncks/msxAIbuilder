@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from msxasm.errors import MontagemError
+from msxasm.include import expandir
 from msxasm.legacy import Z80Assembler
 
 PREENCHIMENTO = 0xFF
@@ -36,10 +37,9 @@ def main(argv: list[str] | None = None) -> int:
         asm.include_paths = list(args.include_path)
         asm.arquivo_base = args.fonte
 
-        texto_fonte = args.fonte.read_text(encoding="utf-8")
-        # Ponto de costura para a Tarefa 4: expansao de INCLUDE entra aqui,
-        # entre a leitura do fonte e a chamada a assemble().
-        binario = asm.assemble(texto_fonte)
+        linhas = expandir(args.fonte, args.include_path)
+        asm.linhas_fonte = linhas
+        binario = asm.assemble("\n".join(l.texto for l in linhas))
 
         if len(binario) > tamanho:
             raise MontagemError(

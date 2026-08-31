@@ -30,6 +30,7 @@ class Z80Assembler:
         self.include_paths = []
         self.arquivo_base = None
         self.linha_atual = None
+        self.linhas_fonte = None
 
     def assemble(self, source: str) -> bytearray:
         lines = source.split('\n')
@@ -199,11 +200,22 @@ class Z80Assembler:
             # significa que o simbolo nao existe -- e devolver 0 em silencio
             # produz uma ROM que monta e trava.
             if self.pass_no == self.max_passes:
+                # Depois do achatamento de INCLUDE (Tarefa 4), self.linha_atual
+                # indexa a lista achatada, nao o arquivo original -- por isso
+                # mapeamos de volta via linhas_fonte para reportar o
+                # arquivo/numero de onde a linha realmente veio (o modulo),
+                # em vez de um offset do fonte achatado.
+                origem = None
+                if self.linhas_fonte and self.linha_atual:
+                    idx = self.linha_atual - 1
+                    if 0 <= idx < len(self.linhas_fonte):
+                        origem = self.linhas_fonte[idx]
                 raise MontagemError(
                     f"expressao nao pode ser avaliada: {expr!r} "
                     f"(apos substituicao de simbolos: {e!r})",
-                    linha=getattr(self, "linha_atual", None),
-                    arquivo=str(self.arquivo_base) if self.arquivo_base else None,
+                    linha=origem.numero if origem else self.linha_atual,
+                    arquivo=origem.arquivo if origem else (
+                        str(self.arquivo_base) if self.arquivo_base else None),
                 )
             return 0
 

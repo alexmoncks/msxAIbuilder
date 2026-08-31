@@ -95,3 +95,15 @@ def test_dw_sem_operando_tambem_reporta_arquivo_e_linha(tmp_path):
     assert r.returncode == 1
     assert "semoperando2.asm:3" in r.stderr
     assert not (tmp_path / "w.rom").exists(), "nao deve escrever ROM em caso de erro"
+
+
+def test_erro_dentro_de_include_aponta_o_modulo(tmp_path):
+    (tmp_path / "rt.asm").write_text("; cabecalho\n    ld hl,SUMIDO\n")
+    principal = tmp_path / "jogo.asm"
+    principal.write_text('    org 4000h\n    INCLUDE "rt.asm"\n')
+
+    r = rodar(str(principal), "-o", str(tmp_path / "j.rom"))
+
+    assert r.returncode == 1
+    assert "rt.asm:2" in r.stderr, r.stderr
+    assert "SUMIDO" in r.stderr
