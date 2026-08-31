@@ -132,35 +132,52 @@ def test_macro_invocada_duas_vezes_monta_sem_erro_de_label_redefinido(tmp_path):
 
     expandir_macros roda ANTES de expandir_locais (ver comentario na cadeia
     em cli.py). Sem o sufixo '_m{contador}' por expansao, as duas chamadas
-    de ATRASO abaixo gerariam a mesma '@@espera:' duas vezes sob o mesmo
+    de TABELA abaixo gerariam o mesmo '@@dados:' duas vezes sob o mesmo
     escopo global (INICIO), e a deteccao de label redefinido da Tarefa 5
-    (MontagemError dentro da mesma passagem) pegaria a colisao -- prova de
-    que, sem o sufixo, isto quebraria. Com o sufixo, cada expansao produz
-    um label distinto ('INICIO@@espera_m1', 'INICIO@@espera_m2') e a
-    montagem completa sem erro.
+    (MontagemError dentro da mesma passagem) pegaria a colisao.
+
+    Rodada de correcao 2: a primeira versao deste teste usava um corpo
+    autorreferente ('djnz @@espera', saltando para si mesmo) -- um salto
+    RELATIVO que codifica -2 (0xFE) independente do endereco do label. A
+    asercao de bytes so provava 'a montagem nao deu erro' (a deteccao de
+    redefinicao da Tarefa 5); nao provava que os dois labels resolveram
+    para enderecos DIFERENTES. Se o sufixo colidisse por algum motivo e as
+    duas expansoes apontassem para o MESMO endereco, o byte -2 continuaria
+    identico e a asercao nao teria como perceber.
+
+    Corpo novo: 'ld hl,@@dados' e uma referencia ABSOLUTA ao proprio
+    label -- o endereco de 16 bits fica gravado literalmente nos bytes da
+    instrucao. A segunda expansao comeca 5 bytes depois da primeira
+    (tamanho fixo do corpo), entao os bytes so batem com o valor esperado
+    se 'INICIO@@dados_m1' e 'INICIO@@dados_m2' resolverem para enderecos
+    distintos de verdade -- prova direta do endereco, nao por ausencia de
+    erro.
     """
-    fonte = tmp_path / "atraso.asm"
+    fonte = tmp_path / "tabela.asm"
     fonte.write_text(
         "    org 4000h\n"
-        "    MACRO ATRASO n\n"
-        "    ld b,n\n"
-        "@@espera:\n"
-        "    djnz @@espera\n"
+        "    MACRO TABELA n\n"
+        "@@dados:\n"
+        "    ld hl,@@dados\n"
+        "    ld a,n\n"
         "    ENDM\n"
         "INICIO:\n"
-        "    ATRASO 5\n"
-        "    ATRASO 10\n"
+        "    TABELA 5\n"
+        "    TABELA 10\n"
         "    ret\n"
     )
-    saida = tmp_path / "atraso.rom"
+    saida = tmp_path / "tabela.rom"
 
     r = rodar(str(fonte), "-o", str(saida), "--org", "0x4000", "--size", "8K")
 
     assert r.returncode == 0, r.stderr
     binario = saida.read_bytes()
-    # ld b,5 / djnz $ / ld b,10 / djnz $ / ret
-    assert binario[0:6] == bytes([0x06, 0x05, 0x10, 0xFE, 0x06, 0x0A])
-    assert binario[6:9] == bytes([0x10, 0xFE, 0xC9])
+    # 1a expansao: INICIO@@dados_m1 = 0x4000 -> ld hl,4000h / ld a,5
+    assert binario[0:5] == bytes([0x21, 0x00, 0x40, 0x3E, 0x05])
+    # 2a expansao: INICIO@@dados_m2 = 0x4005 -> ld hl,4005h / ld a,10
+    # (endereco DIFERENTE do primeiro -- prova que os labels nao colidiram)
+    assert binario[5:10] == bytes([0x21, 0x05, 0x40, 0x3E, 0x0A])
+    assert binario[10] == 0xC9
 
 
 def test_macro_com_parametro_no_meio_da_linha_e_comentario_na_invocacao_monta_bytes_certos(tmp_path):

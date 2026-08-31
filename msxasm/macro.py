@@ -6,6 +6,9 @@ que duas invocacoes da mesma macro nao gerem dois labels iguais. Sem isso, a
 segunda expansao redefine o label da primeira e todos os saltos passam a
 apontar para o lugar errado -- sem erro de montagem.
 
+Corte de comentario e protecao de string literal (msxasm.texto) sao
+compartilhados com msxasm.labels -- mesma logica, mesmo motivo.
+
 Duas protecoes cuidam do resto do risco de uma substituicao textual:
 
 1. Parametro com nome de registrador/flag do Z80 (ex.: MACRO CARREGA a).
@@ -21,8 +24,7 @@ Duas protecoes cuidam do resto do risco de uma substituicao textual:
    bug que msxasm.labels corrige para '@@': um DB com "n pontos" nao pode
    virar "7 pontos" so porque o parametro se chama "n". Comentario e cortado
    fora antes de qualquer substituicao; string literal e preservada intacta
-   dentro do que resta (mesma tecnica de msxasm.labels: re.split/findall em
-   torno de '"..."').
+   dentro do que resta.
 
 3. Comentario na linha de INVOCACAO (nao no corpo). Precisa ser cortado
    ANTES de dividir os argumentos -- do contrario ele entra no valor do
@@ -36,11 +38,10 @@ import re
 
 from msxasm.errors import MontagemError
 from msxasm.source import Linha
+from msxasm.texto import LOCAL, corta_comentario, fora_de_strings
 
 _MACRO = re.compile(r"^\s*MACRO\s+([A-Za-z_][A-Za-z_0-9]*)\s*(.*)$", re.IGNORECASE)
 _ENDM = re.compile(r"^\s*ENDM\s*(?:;.*)?$", re.IGNORECASE)
-_LOCAL = re.compile(r"@@([A-Za-z_][A-Za-z_0-9]*)")
-_STRING = re.compile(r'"[^"]*"')
 
 # Registradores e flags de condicao do Z80. Um parametro com um destes nomes
 # colide com o uso literal do registrador/flag dentro do corpo da macro --
@@ -58,31 +59,6 @@ class _Definicao:
         self.nome = nome
         self.params = params
         self.corpo = corpo
-
-
-def _corta_comentario(texto: str) -> tuple[str, str]:
-    dentro = False
-    for i, c in enumerate(texto):
-        if c == '"':
-            dentro = not dentro
-        elif c == ";" and not dentro:
-            return texto[:i], texto[i:]
-    return texto, ""
-
-
-def _fora_de_strings(codigo: str, transformar) -> str:
-    """Aplica `transformar` apenas nos trechos de `codigo` fora de strings
-    entre aspas duplas. O conteudo das strings e mantido intacto -- e dado,
-    nao codigo, e reescrever ali corromperia a ROM em silencio.
-    """
-    partes = _STRING.split(codigo)
-    literais = _STRING.findall(codigo)
-    pedacos = []
-    for i, parte in enumerate(partes):
-        pedacos.append(transformar(parte))
-        if i < len(literais):
-            pedacos.append(literais[i])
-    return "".join(pedacos)
 
 
 def _coletar(linhas: list[Linha]) -> tuple[dict[str, _Definicao], list[Linha]]:
@@ -146,9 +122,9 @@ def expandir_macros(linhas: list[Linha]) -> list[Linha]:
     for linha in corpo:
         # Corta o comentario da linha de INVOCACAO antes de dividir os
         # argumentos -- ver ponto 3 no docstring do modulo. Reusa
-        # _corta_comentario (mesma funcao usada no corpo), so que aqui um
+        # corta_comentario (mesma funcao usada no corpo), so que aqui um
         # nivel acima: na linha que CHAMA a macro, nao dentro dela.
-        codigo_invocacao, comentario_invocacao = _corta_comentario(linha.texto)
+        codigo_invocacao, comentario_invocacao = corta_comentario(linha.texto)
         bruto = codigo_invocacao.strip()
         primeira = bruto.split()[0].upper() if bruto else ""
 
@@ -190,13 +166,13 @@ def expandir_macros(linhas: list[Linha]) -> list[Linha]:
             return parte
 
         def _substitui_locais(parte: str, _sufixo=sufixo) -> str:
-            return _LOCAL.sub(lambda mm: f"@@{mm.group(1)}{_sufixo}", parte)
+            return LOCAL.sub(lambda mm: f"@@{mm.group(1)}{_sufixo}", parte)
 
         expandidas: list[Linha] = []
         for corpo_linha in definicao.corpo:
-            codigo, comentario = _corta_comentario(corpo_linha.texto)
-            codigo = _fora_de_strings(codigo, _substitui_params)
-            codigo = _fora_de_strings(codigo, _substitui_locais)
+            codigo, comentario = corta_comentario(corpo_linha.texto)
+            codigo = fora_de_strings(codigo, _substitui_params)
+            codigo = fora_de_strings(codigo, _substitui_locais)
 
             expandidas.append(
                 Linha(texto=codigo + comentario, arquivo=linha.arquivo, numero=linha.numero)
