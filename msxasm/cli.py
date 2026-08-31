@@ -4,14 +4,14 @@ import argparse
 import sys
 from pathlib import Path
 
+from msxasm.bss import extrair
 from msxasm.errors import MontagemError
+from msxasm.imagem import montar
 from msxasm.include import expandir
 from msxasm.labels import expandir_locais
-from msxasm.legacy import Z80Assembler
 from msxasm.macro import expandir_macros
+from msxasm.mapper import particionar
 from msxasm.source import Linha
-
-PREENCHIMENTO = 0xFF
 
 
 def _tamanho(texto: str) -> int:
@@ -30,16 +30,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--org", default="0x4000")
     p.add_argument("--size", default="16K", help="tamanho do cartucho, ex: 16K, 32K, 2M")
     p.add_argument("-I", "--include-path", action="append", default=[], type=Path)
+    p.add_argument("--bank-map", type=Path, help="grava o mapa simbolo -> (banco, endereco)")
     args = p.parse_args(argv)
 
-    tamanho = _tamanho(args.size)
-
     try:
-        asm = Z80Assembler()
-        asm.org = int(args.org, 0)
-        asm.include_paths = list(args.include_path)
-        asm.arquivo_base = args.fonte
-
         # Cadeia de preparo do fonte, antes da montagem. Macros expandem
         # antes do escopo de labels locais: o corpo da macro gera
         # '@@espera_m1', e so entao expandir_locais aplica o escopo global
@@ -49,34 +43,33 @@ def main(argv: list[str] | None = None) -> int:
         # pode vir de dentro de um INCLUDE e pode ser gerado por macro, entao
         # so faz sentido procurar por ele depois que as duas expansoes
         # anteriores ja achataram o fonte inteiro.
-        linhas = expandir(args.fonte, args.include_path)
-        linhas = expandir_macros(linhas)
-        linhas = expandir_locais(linhas)
-
-        from msxasm.bss import extrair
-
+        linhas = expandir_locais(expandir_macros(expandir(args.fonte, args.include_path)))
         linhas, ram = extrair(linhas)
         equates = [
             Linha(texto=f"{nome} EQU 0{endereco:04X}h", arquivo="<bss>", numero=n)
             for n, (nome, endereco) in enumerate(ram.items(), start=1)
         ]
-        linhas = equates + linhas
 
-        asm.linhas_fonte = linhas
-        binario = asm.assemble("\n".join(l.texto for l in linhas))
+        # Particionamento em bancos (FLAT quando o fonte nao declara
+        # MAPPER: um unico banco 0 na janela 0x4000, sem paginacao) e
+        # montagem propriamente dita: cada banco monta no endereco da sua
+        # janela e vai para o offset banco * tamanho_banco da imagem final.
+        layout, tamanho_mapper, bancos = particionar(linhas)
+        tamanho = tamanho_mapper or _tamanho(args.size)
 
-        if len(binario) > tamanho:
-            raise MontagemError(
-                f"binario com {len(binario)} bytes nao cabe no cartucho de {tamanho} bytes"
-            )
-        binario.extend([PREENCHIMENTO] * (tamanho - len(binario)))
-
+        binario, mapa = montar(layout, tamanho, bancos, equates, org=int(args.org, 0))
         args.output.write_bytes(bytes(binario))
+
+        if args.bank_map:
+            with open(args.bank_map, "w", encoding="utf-8") as f:
+                f.write(f"# {layout.nome}, {tamanho} bytes\n")
+                for nome, (banco, endereco) in sorted(mapa.items(), key=lambda x: x[1]):
+                    f.write(f"{banco:3d}  0x{endereco:04X}  {nome}\n")
     except MontagemError as e:
         print(f"msxasm: {e}", file=sys.stderr)
         return 1
 
-    print(f"{args.output}: {tamanho} bytes, {len(asm.labels)} labels")
+    print(f"{args.output}: {tamanho} bytes, {len(mapa)} labels")
     return 0
 
 

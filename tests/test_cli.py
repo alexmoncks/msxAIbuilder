@@ -1,9 +1,12 @@
 # tests/test_cli.py
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+GOLDEN_MD5 = "03324e8f4febc0e537c9c808c6c33c00"
 
 
 def rodar(*args: str) -> subprocess.CompletedProcess:
@@ -389,3 +392,90 @@ def test_colisao_de_bss_impede_a_montagem(tmp_path):
 
     assert r.returncode == 1
     assert "ESTADO" in r.stderr
+
+
+def test_megarom_konami_monta_2mb_com_bancos(tmp_path):
+    fonte = tmp_path / "mega.asm"
+    fonte.write_text(
+        "    MAPPER KONAMI, 2048K\n"
+        "    BANK 0\n"
+        '    db "AB"\n'
+        "    BANK 255 WINDOW 8000h\n"
+        "    db 0EEh\n"
+    )
+    saida = tmp_path / "mega.rom"
+    mapa = tmp_path / "mega.map"
+
+    r = rodar(str(fonte), "-o", str(saida), "--bank-map", str(mapa))
+
+    assert r.returncode == 0, r.stderr
+    b = saida.read_bytes()
+    assert len(b) == 2 * 1024 * 1024
+    assert b[0:2] == b"AB"
+    assert b[255 * 8192] == 0xEE
+    assert mapa.exists()
+
+
+def test_golden_do_pong_via_cli_bate_com_o_md5(tmp_path):
+    """Regressao de integracao da Tarefa 9: nao basta Z80Assembler.assemble()
+    direto (test_golden.py) continuar batendo -- a CLI agora passa pelo
+    corpo reescrito do try (particionar()/montar()), e e exatamente ali
+    que uma regressao silenciosa entraria. O Pong nao declara MAPPER,
+    entao cai em FLAT com um banco unico; tem que sair byte a byte igual
+    tambem pela CLI real, nao so via Z80Assembler isolado.
+    """
+    saida = tmp_path / "pong.rom"
+
+    r = rodar(str(FIXTURES / "pong-v24.asm"), "-o", str(saida),
+              "--org", "0x4000", "--size", "16K")
+
+    assert r.returncode == 0, r.stderr
+    obtido = saida.read_bytes()
+    assert len(obtido) == 16384
+    assert hashlib.md5(obtido).hexdigest() == GOLDEN_MD5
+
+
+def test_org_da_cli_e_usado_na_montagem_nao_ignorado(tmp_path):
+    """O --org da CLI precisa chegar ate o binario de verdade. Um fonte SEM
+    'org' proprio, montado com --org 0x8000, tem que gerar uma referencia
+    absoluta ao proprio label apontando para 0x8000 -- nao para 0, que e
+    onde Z80Assembler.current_address comecaria se msxasm.imagem nao
+    propagasse explicitamente o org recebido da CLI para dentro do fonte
+    assemblado (Z80Assembler zera current_address a cada passagem e so a
+    atualiza quando encontra uma diretiva ORG no proprio texto).
+    """
+    fonte = tmp_path / "semorg.asm"
+    fonte.write_text("INICIO:\n    ld hl,INICIO\n    ret\n")
+    saida = tmp_path / "semorg.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--org", "0x8000", "--size", "8K")
+
+    assert r.returncode == 0, r.stderr
+    binario = saida.read_bytes()
+    assert binario[0:3] == bytes([0x21, 0x00, 0x80]), \
+        "ld hl,INICIO deveria apontar para 0x8000, o --org pedido"
+
+
+def test_banco_fora_do_tamanho_pedido_por_size_falha_com_mensagem_clara(tmp_path):
+    """Decisao de produto: quando o fonte declara 'MAPPER KONAMI' SEM
+    tamanho, o --size da CLI e quem manda. particionar() devolve
+    tamanho=0 e so limita bancos pelo teto absoluto do layout (256 para
+    Konami); quem tem que recusar um banco que nao caiba na imagem final
+    e montar(), usando o tamanho que a CLI escolheu. BANK 100 nao cabe
+    numa imagem de 32K (4 bancos de 8KB) e tem que falhar com mensagem
+    clara, nao montar em silencio nem estourar com traceback -- e, acima
+    de tudo, nao pode deixar uma ROM parcial no disco.
+    """
+    fonte = tmp_path / "estourado.asm"
+    fonte.write_text(
+        "    MAPPER KONAMI\n"
+        "    BANK 100\n"
+        "    db 1\n"
+    )
+    saida = tmp_path / "estourado.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "32K")
+
+    assert r.returncode == 1
+    assert "banco 100" in r.stderr.lower()
+    assert not saida.exists(), "nao deve escrever ROM em caso de erro"
