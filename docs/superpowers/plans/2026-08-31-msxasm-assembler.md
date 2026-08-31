@@ -700,17 +700,22 @@ def _resolver(alvo: str, incluidor: Path, search_paths: list[Path]) -> Path | No
 
 def expandir(caminho: Path, search_paths: list[Path]) -> list[Linha]:
     caminho = Path(caminho).resolve()
-    ja_incluidos: set[Path] = set()
-    return _expandir(caminho, search_paths, ja_incluidos, [])
+    return _expandir(caminho, search_paths, set(), set(), [])
 
 
 def _expandir(caminho: Path, search_paths: list[Path],
-              ja_incluidos: set[Path], pilha: list[str]) -> list[Linha]:
-    if caminho in {Path(p.split(":")[0]).resolve() for p in pilha}:
+              ja_incluidos: set[Path], em_andamento: set[Path],
+              pilha: list[str]) -> list[Linha]:
+    # Dois conjuntos, nao um. `ja_incluidos` sao os arquivos CONCLUIDOS, e serve
+    # a guarda de repeticao; `em_andamento` sao os abertos na pilha atual, e
+    # serve a deteccao de ciclo. Com um conjunto so, marcado na entrada, um
+    # ciclo a -> b -> a cai na guarda de repeticao ("ja incluido, pular") ANTES
+    # de a checagem de ciclo rodar, e o erro nunca e levantado.
+    if caminho in em_andamento:
         trilha = " -> ".join(pilha + [str(caminho)])
         raise MontagemError(f"inclusao circular detectada: {trilha}")
 
-    ja_incluidos.add(caminho)
+    em_andamento.add(caminho)
     resultado: list[Linha] = []
 
     for linha in carregar(caminho):
@@ -735,9 +740,12 @@ def _expandir(caminho: Path, search_paths: list[Path],
 
         marca = f"{linha.arquivo}:{linha.numero}"
         resultado.extend(
-            _expandir(destino, search_paths, ja_incluidos, pilha + [marca])
+            _expandir(destino, search_paths, ja_incluidos, em_andamento,
+                      pilha + [marca])
         )
 
+    em_andamento.discard(caminho)
+    ja_incluidos.add(caminho)
     return resultado
 ```
 
