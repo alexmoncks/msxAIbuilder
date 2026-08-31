@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 
 from msxasm.errors import MontagemError
+from msxasm.numero import parse as _numero
 from msxasm.source import Linha
 from msxasm.texto import corta_comentario
 
@@ -70,32 +71,13 @@ _BANK = re.compile(r"^\s*BANK\s+(\d+)\s*(?:WINDOW\s+(\S+))?\s*$", re.IGNORECASE)
 # regexes acima e caem silenciosamente como linha de codigo comum: o banco
 # corrente nunca muda e os bytes seguintes vao parar no banco/janela
 # errados sem nenhum aviso (achado da revisao da Tarefa 8, rodada 1).
+# A gramatica numerica (K, M, H, 0x, decimal) mora em msxasm.numero desde a
+# leva final de correcao: existiam tres copias divergentes dela (aqui, em
+# bss.py e em cli.py) e a divergencia era observavel pelo usuario. O contrato
+# nao mudou -- operando malformado continua saindo como MontagemError com
+# arquivo:linha, nunca como ValueError cru (achado da revisao da Tarefa 8).
 _MAPPER_PALAVRA = re.compile(r"^\s*MAPPER\b(?!\s*:)", re.IGNORECASE)
 _BANK_PALAVRA = re.compile(r"^\s*BANK\b(?!\s*:)", re.IGNORECASE)
-
-
-def _numero(texto: str, *, linha: int | None, arquivo: str | None) -> int:
-    t = texto.strip().upper()
-    try:
-        if t.endswith("K"):
-            return int(t[:-1]) * 1024
-        if t.endswith("M"):
-            return int(t[:-1]) * 1024 * 1024
-        if t.endswith("H"):
-            return int(t[:-1], 16)
-        if t.startswith("0X"):
-            return int(t, 16)
-        return int(t, 10)
-    except ValueError:
-        # Mesma classe de furo que a Tarefa 7 fechou em bss.py: um operando
-        # numerico malformado (tamanho de MAPPER, valor de WINDOW) nao pode
-        # escapar como ValueError cru -- isso atravessaria o "except
-        # MontagemError" da CLI como traceback puro, sem arquivo nem linha
-        # (achado da revisao da Tarefa 8, rodada 1).
-        raise MontagemError(
-            f"numero invalido: {texto!r}",
-            linha=linha, arquivo=arquivo,
-        ) from None
 
 
 def hint_de_arquivo(nome_base: str, layout: Layout) -> str:
