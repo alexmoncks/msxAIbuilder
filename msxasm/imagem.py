@@ -52,6 +52,45 @@ def _linha_org(endereco: int) -> Linha:
     return Linha(texto=f"org 0{endereco:04X}h", arquivo="<org>", numero=0)
 
 
+def _conferir_org_bate_com_a_janela(asm: Z80Assembler, numero: int, janela: int) -> None:
+    """Num banco de mapper, um 'org' do fonte que DIVIRJA da janela declarada
+    e erro do autor -- nao intencao.
+
+    'BANK n WINDOW addr' existe justamente para substituir o org manual: o
+    banco monta no endereco da janela e vai para o offset n * tamanho_banco da
+    imagem. Um 'org 9000h' dentro de um banco com WINDOW 8000h nao move o
+    banco para lugar nenhum; ele so mente para o assembler. O codigo continua
+    no offset 0 do banco (CPU 0x8000), enquanto todo label sai calculado a
+    partir de 0x9000: um 'jp ALVO' monta 'C3 00 90' e aponta para
+    preenchimento 0xFF. ROM gravada, codigo de saida 0, maquina travada -- a
+    falha exata que este projeto existe para eliminar.
+
+    Ate a leva anterior o sintoma era outro (o org sintetico entrava sempre e
+    o zero-fill de _directive empurrava o codigo ate 0x9000 de verdade:
+    desperdicio de espaco, mas ROM correta). Preservar o org do fonte tirou o
+    efeito colateral que salvava o caso, e a validacao que devia substitui-lo
+    nao existia.
+
+    Compara o valor JA AVALIADO por Z80Assembler (asm.orgs_do_fonte), nao o
+    texto da linha: assim 'org JANELA' com JANELA vindo de um EQU tambem e
+    conferido. O org sintetico de _linha_org e sempre igual a janela, entao
+    nunca dispara aqui.
+
+    FLAT nao passa por esta checagem: la nao ha janela nenhuma a respeitar, o
+    org do fonte manda e o --org da CLI e so o padrao.
+    """
+    for valor, arquivo, linha in asm.orgs_do_fonte:
+        if valor == janela:
+            continue
+        raise MontagemError(
+            f"org 0x{valor:04X} diverge da janela 0x{janela:04X} declarada "
+            f"para o banco {numero}: num banco paginado quem manda e a "
+            f"janela do 'BANK {numero} WINDOW' -- remova o org ou escreva "
+            f"'org 0{janela:04X}h'",
+            linha=linha, arquivo=arquivo,
+        )
+
+
 def _montar_bloco(linhas: list[Linha], endereco: int,
                   include_paths: list[Path] | None,
                   semear: dict[str, int]) -> tuple[bytearray, Z80Assembler]:
@@ -120,6 +159,12 @@ def montar(layout: Layout, tamanho: int, bancos: dict[int, Banco],
 
         binario, asm = _montar_bloco(linhas_globais + banco.linhas, banco.janela,
                                      include_paths, simbolos_residentes)
+
+        # Antes das checagens de tamanho: um org divergente pode disparar
+        # zero-fill e estourar o banco, e ai o usuario receberia 'banco 1 tem
+        # 36864 bytes' -- verdadeiro, mas sem dizer o que ele escreveu de
+        # errado nem em que linha.
+        _conferir_org_bate_com_a_janela(asm, numero, banco.janela)
 
         if len(binario) > layout.tamanho_banco:
             raise MontagemError(

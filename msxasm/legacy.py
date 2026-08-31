@@ -11,6 +11,11 @@ from typing import Dict, List, Tuple, Optional
 
 from msxasm.errors import MontagemError
 
+# ORG na mesma linha de um label, ja sem o 'LABEL:' na frente. '(.+)?' (e nao
+# '(.*)') para que ORG sem operando chegue a _directive como None, exatamente
+# como no despacho normal de diretivas.
+_ORG_APOS_LABEL = re.compile(r'ORG\b(.+)?$', re.IGNORECASE)
+
 _LOOKS_LIKE_CODE = re.compile(
     r'^(ld|call|ret|reti|retn|jr|jp|out|in|xor|or|and|cp|add|adc|sub|sbc|inc|dec|'
     r'push|pop|djnz|neg|nop|ex|exx|set|res|bit|rl|rr|rlc|rrc|sla|sra|srl|rla|rra|'
@@ -40,6 +45,14 @@ class Z80Assembler:
         self.arquivo_base = None
         self.linha_atual = None
         self.linhas_fonte = None
+        # ORGs executados NESTA passagem: (valor, arquivo, linha). Quem
+        # consome e msxasm.imagem.montar, para recusar um 'org' do fonte que
+        # divirja da janela declarada do banco. Guardar o valor JA AVALIADO
+        # (e nao o texto) e o que faz a checagem valer tambem para
+        # 'org JANELA_DO_BANCO' e outras expressoes -- uma leitura textual
+        # so enxergaria literais. Reiniciada a cada passagem, como
+        # self.output e self.current_address.
+        self.orgs_do_fonte: List[Tuple[int, Optional[str], Optional[int]]] = []
 
     def assemble(self, source: str) -> bytearray:
         lines = source.split('\n')
@@ -47,6 +60,7 @@ class Z80Assembler:
         for self.pass_no in range(1, self.max_passes + 1):
             self.output = bytearray()
             self.current_address = 0
+            self.orgs_do_fonte = []
             # Reiniciado a cada passagem: rastreia labels ja definidos NESTA
             # passagem (nome normalizado -> origem da definicao), para
             # distinguir "label redefinido de verdade" de "e so a segunda
@@ -118,6 +132,24 @@ class Z80Assembler:
                                 f"ja definido em {outro_local}",
                                 linha=linha, arquivo=arquivo,
                             )
+                        # 'INICIO: ORG 4000h' -- o label vale o endereco
+                        # DEPOIS do ORG, como em qualquer assembler, e nao o
+                        # de antes. Executar o ORG aqui, antes de gravar o
+                        # label, e o que fecha um buraco silencioso: com o
+                        # ORG sendo processado depois (no despacho de
+                        # diretivas la embaixo, ja sem o label na frente),
+                        # 'INICIO' era ligado ao current_address ANTERIOR --
+                        # zero, quando o ORG e a primeira linha util. O 'jp
+                        # INICIO' montava 'C3 00 00' e a ROM saia com codigo
+                        # de saida 0 saltando para lugar nenhum.
+                        # So ORG recebe este tratamento: DB/DW/DS/INCBIN
+                        # EMITEM no endereco corrente, entao para elas o
+                        # label tem que valer o endereco de ANTES -- que e o
+                        # que ja acontece.
+                        org_na_linha = rest and _ORG_APOS_LABEL.match(rest)
+                        if org_na_linha:
+                            self._executar_diretiva('ORG', org_na_linha.group(1), stripped)
+                            rest = ''
                         if label_part.upper() not in self.equates:
                             # Chave guardada em maiuscula, como self.equates
                             # ja faz (linha do EQU abaixo). _eval maiusculiza
@@ -216,28 +248,7 @@ class Z80Assembler:
                 # ORG/DW/DB/DS/INCBIN
                 d = re.match(r'(ORG|DB|DW|DS|INCBIN)\b(.+)?$', stripped, re.IGNORECASE)
                 if d:
-                    try:
-                        self._directive(d.group(1).upper(), d.group(2))
-                    except MontagemError:
-                        # Erro real (ex.: simbolo inexistente dentro da
-                        # expressao da diretiva) ja vem com linha de origem
-                        # de _eval -- propaga direto, sem reembrulhar.
-                        raise
-                    except Exception as e:
-                        # Diretiva malformada (ex.: DB/DW sem operando vira
-                        # TypeError cru dentro de _parse_nums) escapava sem
-                        # arquivo nem linha, atravessando o "except
-                        # MontagemError" da CLI como traceback bruto. Guarda
-                        # o repr do erro original na mensagem -- rastro do
-                        # que de fato aconteceu, para nao confundir engano de
-                        # sintaxe do usuario com bug de implementacao.
-                        arquivo, linha = self._origem()
-                        raise MontagemError(
-                            f"diretiva {d.group(1).upper()} mal formada em "
-                            f"{stripped!r}: {e!r}",
-                            linha=linha,
-                            arquivo=arquivo,
-                        ) from e
+                    self._executar_diretiva(d.group(1).upper(), d.group(2), stripped)
                     i += 1
                     continue
                 
@@ -429,6 +440,36 @@ class Z80Assembler:
         return m.get(s.upper())
 
     # ------------------------------------------------------------------ directive
+    def _executar_diretiva(self, nome: str, arg: Optional[str], texto: str):
+        """Executa uma diretiva ja reconhecida, traduzindo erro cru em
+        MontagemError com arquivo:linha.
+
+        Ponto unico porque ha DOIS lugares que despacham diretiva: o despacho
+        normal de assemble() e o ORG que vem na mesma linha de um label
+        ('INICIO: ORG 4000h'). Sem isto, um dos dois caminhos deixaria escapar
+        traceback de Python -- a mesma classe de furo que a Tarefa 3 fechou.
+        """
+        try:
+            self._directive(nome, arg)
+        except MontagemError:
+            # Erro real (ex.: simbolo inexistente dentro da expressao da
+            # diretiva) ja vem com linha de origem de _eval -- propaga
+            # direto, sem reembrulhar.
+            raise
+        except Exception as e:
+            # Diretiva malformada (ex.: DB/DW sem operando vira TypeError
+            # cru dentro de _parse_nums) escapava sem arquivo nem linha,
+            # atravessando o "except MontagemError" da CLI como traceback
+            # bruto. Guarda o repr do erro original na mensagem -- rastro do
+            # que de fato aconteceu, para nao confundir engano de sintaxe do
+            # usuario com bug de implementacao.
+            arquivo, linha = self._origem()
+            raise MontagemError(
+                f"diretiva {nome} mal formada em {texto!r}: {e!r}",
+                linha=linha,
+                arquivo=arquivo,
+            ) from e
+
     def _directive(self, dir: str, arg: Optional[str]):
         if dir == 'ORG':
             v = self._eval(arg)
@@ -437,6 +478,7 @@ class Z80Assembler:
             self.current_address = v
             if self.org == 0:
                 self.org = v
+            self.orgs_do_fonte.append((v, *self._origem()))
         elif dir == 'DB':
             for b in self._parse_nums(arg):
                 self.output.append(b & 0xFF)

@@ -132,3 +132,55 @@ def test_mapa_guarda_todas_as_definicoes_de_um_nome_homonimo():
     assert sorted(mapa["LOOP"]) == [(0, 0x4001), (1, 0x8000)]
     assert mapa["INICIO"] == [(0, 0x4000)]
     assert sum(len(v) for v in mapa.values()) == 3
+
+
+# ---------------------------------------------------------------------------
+# Adjudicacao: as duas quebras deixadas em aberto pela leva anterior. Trocar a
+# injecao incondicional do org sintetico por deteccao textual resolveu a
+# regressao principal, mas removeu o efeito colateral (o zero-fill) do qual
+# estes casos dependiam -- sem por no lugar a validacao que devia substitui-lo.
+
+
+def test_org_do_fonte_divergindo_da_janela_do_banco_e_erro():
+    """Quebra 1: 'org 9000h' num banco com WINDOW 8000h nao move o banco para
+    lugar nenhum -- o codigo fica no offset 0 do banco (CPU 0x8000) enquanto
+    os labels saem calculados a partir de 0x9000. O 'jp ALVO' montava
+    'C3 00 90', apontando para preenchimento 0xFF, com ROM gravada e codigo
+    de saida 0.
+    """
+    layout = LAYOUTS["KONAMI"]
+    with pytest.raises(MontagemError) as exc:
+        montar(layout, 65536, {
+            0: banco(0, 0x4000, '    db "AB"'),
+            1: banco(1, 0x8000, "    org 9000h", "ALVO:", "    jp ALVO"),
+        }, [])
+    msg = str(exc.value)
+    assert "t.asm:1" in msg, msg          # arquivo e linha do org
+    assert "0x9000" in msg, msg           # o valor encontrado
+    assert "0x8000" in msg, msg           # a janela esperada
+    assert "banco 1" in msg, msg
+
+
+def test_org_que_coincide_com_a_janela_do_banco_continua_montando():
+    """Divergir e erro; concordar nao. Um fonte que escreve o org certo a mao
+    continua valido -- e o org sintetico injetado quando o fonte se cala e
+    exatamente esse caso, entao ele nao pode disparar a checagem.
+    """
+    layout = LAYOUTS["KONAMI"]
+    img, mapa = montar(layout, 32768, {
+        0: banco(0, 0x4000, '    db "AB"'),
+        1: banco(1, 0x8000, "    org 8000h", "ALVO:", "    jp ALVO"),
+    }, [])
+    assert mapa["ALVO"] == [(1, 0x8000)]
+    assert list(img[8192:8195]) == [0xC3, 0x00, 0x80]
+
+
+def test_org_divergente_em_flat_continua_valendo():
+    """FLAT nao tem janela a respeitar: la o org do fonte manda e o --org da
+    CLI e so o padrao (guarda do conserto ao lado, que nao pode vazar para o
+    caminho comum -- o do golden).
+    """
+    img, _ = montar(LAYOUTS["FLAT"], 16384,
+                    {0: banco(0, 0x4000, "    org 8000h", "    ret")},
+                    [], org=0x4000)
+    assert img[0] == 0xC9

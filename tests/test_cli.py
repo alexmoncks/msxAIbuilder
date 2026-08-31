@@ -769,3 +769,44 @@ def test_cadeia_completa_include_macro_local_bss_e_bancos(tmp_path):
         0xCD, 0x00, 0x40,        # call RT_INIT (banco residente)
         0xFF,                    # preenchimento
     ])
+
+
+def test_org_manual_em_banco_paginado_divergindo_da_window_falha(tmp_path):
+    """Quebra 1 da adjudicacao, pela CLI real: montava com codigo de saida 0 e
+    gravava uma ROM cujo 'jp ALVO' apontava para preenchimento 0xFF.
+    """
+    fonte = tmp_path / "janela.asm"
+    fonte.write_text(
+        "    MAPPER KONAMI, 64K\n"
+        "    BANK 0\n"
+        '    db "AB"\n'
+        "    BANK 1 WINDOW 8000h\n"
+        "    org 9000h\n"
+        "ALVO:\n"
+        "    jp ALVO\n"
+    )
+    saida = tmp_path / "janela.rom"
+
+    r = rodar(str(fonte), "-o", str(saida))
+
+    assert r.returncode == 1, r.stdout
+    assert "janela.asm:5" in r.stderr, r.stderr
+    assert "0x9000" in r.stderr and "0x8000" in r.stderr, r.stderr
+    assert not saida.exists(), "nao deve escrever ROM em caso de erro"
+
+
+def test_label_na_linha_do_org_aponta_para_o_endereco_do_org(tmp_path):
+    """Quebra 2 da adjudicacao, pela CLI real: 'C3 00 00' em vez de
+    'C3 00 40', com INICIO = 0x0000 e codigo de saida 0.
+    """
+    fonte = tmp_path / "labelorg.asm"
+    fonte.write_text("INICIO: ORG 4000h\n    nop\n    jp INICIO\n")
+    saida = tmp_path / "labelorg.rom"
+    mapa = tmp_path / "labelorg.map"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "8K", "--bank-map", str(mapa))
+
+    assert r.returncode == 0, r.stderr
+    b = saida.read_bytes()
+    assert b[0:4] == bytes([0x00, 0xC3, 0x00, 0x40]), "jp INICIO -> 0x4000"
+    assert "0x4000  INICIO" in mapa.read_text(encoding="utf-8")

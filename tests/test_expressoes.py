@@ -172,3 +172,25 @@ def test_equ_com_dollar_e_referencia_adiante_resolve_igual_nas_duas_passagens():
     # FIM = 0x4002 + 3 (ld hl,HERE) + 1 (ret) = 0x4006.
     # HERE = FIM - $ = 0x4006 - 0x4002 = 4, resolvido so na passagem final.
     assert binario[3] == 0x04 and binario[4] == 0x00   # ld hl,4
+
+
+def test_label_na_mesma_linha_do_org_vale_o_endereco_depois_do_org():
+    """Quebra 2 da adjudicacao: 'INICIO: ORG 4000h' ligava INICIO ao
+    current_address ANTERIOR ao ORG. Enquanto o org sintetico entrava sempre,
+    esse endereco anterior por acaso era o org da CLI e ninguem via; sem ele,
+    e zero -- 'jp INICIO' virava 'C3 00 00', ROM gravada, salto para lugar
+    nenhum. O label tem que valer o endereco DEPOIS do ORG, como em qualquer
+    assembler.
+    """
+    binario = montar("INICIO: ORG 4000h\n    nop\n    jp INICIO\n")
+    assert binario[0] == 0x00
+    assert list(binario[1:4]) == [0xC3, 0x00, 0x40]
+
+
+def test_label_antes_de_db_continua_valendo_o_endereco_de_antes():
+    """O oposto de ORG: DB/DW/DS EMITEM no endereco corrente, entao um label
+    na mesma linha tem que valer o endereco de ANTES. So ORG muda de lado.
+    """
+    binario = montar("    org 4000h\nDADO: db 7\n    ld hl,DADO\n")
+    assert binario[0] == 0x07
+    assert list(binario[1:4]) == [0x21, 0x00, 0x40]
