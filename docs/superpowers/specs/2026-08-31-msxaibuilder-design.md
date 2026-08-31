@@ -25,7 +25,7 @@ e resumida na seção 6.2. Ela **não** faz parte da v1 — ver seções 10 e 11
 | Autoria | Híbrido `.asm` + Python para dados | ASM legível e navegável; Python só onde há cálculo (tabelas, música, arte) |
 | Organização | INCLUDEs granulares | Previsível e depurável; sem tree-shaking, que quebra com jump table e código automodificante |
 | Assembler | INCLUDE + macros + mapper/bancos | Escolha explícita do usuário |
-| MegaROM na v1 | Assembler e runtime sim; Pong fica flat 32KB | Trocar mapper e biblioteca ao mesmo tempo confunde a causa de qualquer regressão |
+| MegaROM na v1 | Assembler e runtime sim; Pong fica flat 16KB | Trocar mapper e biblioteca ao mesmo tempo confunde a causa de qualquer regressão |
 | Licença | Apache-2.0 | Permissiva com concessão de patente; não alcança os jogos de terceiros |
 | Visibilidade | Público | |
 | WebMSX | Submodule apontando para fork próprio | Permite ganchos de teste no emulador sem depender do upstream |
@@ -153,8 +153,10 @@ vira disciplina manual.
 
 Bônus decisivo: no `reset()` o Konami mapeia os segmentos 0,1,2,3 linearmente em
 `4000h–BFFFh`. **Os primeiros 32KB de uma MegaROM Konami se comportam byte a
-byte como a ROM flat de 32KB do Pong atual** — o port não precisa de adaptação
-para caber, só ganha os bancos 4..255.
+byte como uma ROM flat de 32KB** — e o Pong v24 ocupa apenas 16KB
+(`CART = 16 * 1024` em `build_pong.py`; o `pong-ai.rom` publicado tem 16384
+bytes), portanto cabe folgado no primeiro segmento. O port não precisa de
+adaptação, só ganha os bancos seguintes.
 
 ### 5.2 Aritmética de 2MB
 
@@ -258,7 +260,7 @@ documentada**, porque convenção se esquece e o bug resultante é silencioso:
 # games/pong/build.py
 from msxbuild import Project
 
-p = Project("pong", mapper="flat32k")
+p = Project("pong", mapper="flat16k")
 
 p.font("art/font5x7.png")
 p.image("art/logo.bmp", compress="lz")
@@ -339,6 +341,16 @@ inclusive música, IA e placar. Divergência aponta o quadro exato e o que mudou
 Isso é viável porque **o Pong é determinístico**: uma varredura por fontes de
 aleatoriedade (`ld a,r`, seed, RNG) em `build_pong.py` não encontrou nenhuma.
 
+**E o build também é determinístico**, o que dá um segundo ponto de apoio:
+`build_pong.py` executado duas vezes produz bytes idênticos, e o resultado bate
+com o `pong-ai.rom` publicado — 16384 bytes, `md5 03324e8f4febc0e537c9c808c6c33c00`.
+
+Esse hash é o **golden file** do projeto. Ele permite refatorar o assembler
+existente com rede: qualquer mudança em `msxasm` que ainda produza exatamente
+esses 16384 bytes a partir do mesmo fonte preservou a codificação de opcodes.
+Sem isso, reescrever um assembler que já monta um jogo real seria trocar código
+provado por código novo sem forma de comparar.
+
 Requer capacidade que hoje não existe: **input roteirizado** — o harness precisa
 injetar teclado e joystick por script.
 
@@ -379,9 +391,9 @@ e a anatomia da ROM têm valor direto aqui), `Dockerfile` e `run.sh`.
 - Tree-shaking de rotinas não usadas — quebra com jump table e código
   automodificante, que o Pong já usa.
 - Suporte a ASCII8, ASCII16, KonamiSCC e demais mappers além de Konami e flat
-  32KB. A arquitetura de `MAPPER` os acomoda; a v1 não os implementa.
+  flat. A arquitetura de `MAPPER` os acomoda; a v1 não os implementa.
 - ROMs acima de 2MB.
-- Port do Pong para MegaROM. Ele permanece flat 32KB na v1.
+- Port do Pong para MegaROM. Ele permanece flat 16KB na v1.
 - Scroll, mapas de tile e sistema de colisão genérico — entram quando um jogo
   concreto pedir.
 - **A trilha inteira de composite por blitter** (seção 6.2 e
