@@ -38,6 +38,14 @@ class Z80Assembler:
         for self.pass_no in range(1, self.max_passes + 1):
             self.output = bytearray()
             self.current_address = 0
+            # Reiniciado a cada passagem: rastreia labels ja definidos NESTA
+            # passagem (nome normalizado -> origem da definicao), para
+            # distinguir "label redefinido de verdade" de "e so a segunda
+            # passagem revisitando os mesmos labels de sempre". self.labels
+            # (abaixo) persiste entre passagens de proposito -- so este
+            # dict e reiniciado por passagem (rodada de correcao 2 da
+            # Tarefa 5).
+            labels_definidos_nesta_passagem: Dict[str, Tuple[Optional[str], Optional[int]]] = {}
             
             i = 0
             while i < len(lines):
@@ -79,8 +87,30 @@ class Z80Assembler:
                             # um label 100% maiusculo batia com essa busca.
                             # Ver comentario longo em _eval() para o motivo
                             # dessa correcao (rodada 1 da Tarefa 5).
-                            if label_part.upper() not in self.labels:
-                                self.labels[label_part.upper()] = self.current_address
+                            chave = label_part.upper()
+                            if chave in labels_definidos_nesta_passagem:
+                                # Redefinicao de verdade DENTRO DA MESMA
+                                # passagem -- e o buraco que a rodada de
+                                # correcao 2 fechou: dois modulos incluidos
+                                # que declarem o mesmo label global (ex.:
+                                # VDP_INIT) colidiam em silencio, a segunda
+                                # definicao vencia sem erro nenhum, e toda
+                                # chamada ia para o modulo errado. O escopo
+                                # de '@@' desta tarefa so protege LOCAIS --
+                                # isto fecha o caso GLOBAL. Comparar contra
+                                # labels_definidos_nesta_passagem (nao contra
+                                # self.labels, que persiste entre passagens)
+                                # e o que evita a segunda passagem acusar
+                                # redefinicao dos mesmos labels de sempre.
+                                arquivo, linha = self._origem()
+                                primeiro_arquivo, primeiro_linha = labels_definidos_nesta_passagem[chave]
+                                primeiro_local = self._formatar_origem(primeiro_arquivo, primeiro_linha)
+                                raise MontagemError(
+                                    f"label '{chave}' ja foi definido em {primeiro_local}",
+                                    linha=linha, arquivo=arquivo,
+                                )
+                            labels_definidos_nesta_passagem[chave] = self._origem()
+                            self.labels[chave] = self.current_address
                         stripped = rest if rest else ''
                         if not stripped:
                             i += 1
@@ -193,11 +223,11 @@ class Z80Assembler:
         via msxasm.include.expandir) para achar a Linha original e devolver
         seu arquivo/numero reais.
 
-        Ponto unico: os tres locais de assemble() que levantam MontagemError
+        Ponto unico: os quatro locais de assemble() que levantam MontagemError
         (mnemonico desconhecido, diretiva malformada, expressao que nao
-        avalia) chamam este helper em vez de montar arquivo/linha cada um
-        do seu jeito -- um lugar so para acertar, e um quarto ponto de erro
-        que alguem adicionar depois nao tem como esquecer o mapeamento.
+        avalia, e label redefinido -- este ultimo acrescentado na rodada de
+        correcao 2 da Tarefa 5) chamam este helper em vez de montar
+        arquivo/linha cada um do seu jeito -- um lugar so para acertar.
 
         Cai em (arquivo_base, linha_atual) quando linhas_fonte nao esta
         setado -- uso direto de Z80Assembler().assemble() sem passar pela
@@ -210,6 +240,22 @@ class Z80Assembler:
                 return origem.arquivo, origem.numero
         return (str(self.arquivo_base) if self.arquivo_base else None,
                 self.linha_atual)
+
+    @staticmethod
+    def _formatar_origem(arquivo, linha) -> str:
+        """Formata uma origem (arquivo, numero) vinda de _origem() para
+        citar dentro do TEXTO de uma mensagem de erro -- usado quando a
+        origem que importa nao e a do proprio erro (que MontagemError ja
+        formata no cabecalho 'arquivo:linha: '), e sim uma segunda
+        localizacao mencionada de passagem (ex.: 'ja foi definido em X').
+        """
+        if arquivo and linha is not None:
+            return f"{arquivo}:{linha}"
+        if arquivo:
+            return arquivo
+        if linha is not None:
+            return f"linha {linha}"
+        return "um local nao identificado"
 
     def _eval(self, expr: str) -> int:
         if not expr:

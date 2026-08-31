@@ -127,6 +127,65 @@ def test_local_em_caixa_mista_resolve_ponta_a_ponta(tmp_path):
     assert binario[2] == 0xC9          # RET
 
 
+def test_locais_identicos_sob_globais_diferentes_continuam_validos(tmp_path):
+    """Rodada de correcao 2 da Tarefa 5: a deteccao de label global
+    redefinido NAO pode confundir '@@LOOP' definido sob 'PSG_ON:' com
+    '@@LOOP' definido sob 'FM_ON:' -- depois do escopamento de
+    expandir_locais eles sao simbolos distintos ('PSG_ON@@LOOP' e
+    'FM_ON@@LOOP'), exatamente o caso de uso que a Tarefa 5 original
+    existe para resolver.
+    """
+    fonte = tmp_path / "runtime.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "PSG_ON:\n"
+        "@@LOOP:\n"
+        "    djnz @@LOOP\n"
+        "    ret\n"
+        "FM_ON:\n"
+        "@@LOOP:\n"
+        "    djnz @@LOOP\n"
+        "    ret\n"
+    )
+    saida = tmp_path / "runtime.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--org", "0x4000", "--size", "8K")
+
+    assert r.returncode == 0, r.stderr
+    binario = saida.read_bytes()
+    # PSG_ON: djnz PSG_ON@@LOOP ; ret
+    assert binario[0:3] == bytes([0x10, 0xFE, 0xC9])
+    # FM_ON: djnz FM_ON@@LOOP ; ret (mesmo padrao, endereco proprio)
+    assert binario[3:6] == bytes([0x10, 0xFE, 0xC9])
+
+
+def test_label_global_colidindo_entre_dois_includes_e_erro_nomeando_os_dois_arquivos(tmp_path):
+    """O cenario real da biblioteca de runtime: dois modulos incluidos
+    (vdp.asm e sprite.asm) declaram o mesmo label global (VDP_INIT). Sem
+    deteccao, a segunda definicao venceria em silencio e toda chamada
+    para VDP_INIT iria para o modulo errado -- travamento em runtime, sem
+    erro de montagem nenhum. A mensagem precisa nomear os DOIS arquivos:
+    onde a colisao foi detectada (segunda definicao) e onde foi a
+    primeira.
+    """
+    (tmp_path / "vdp.asm").write_text("; cabecalho vdp\nVDP_INIT:\n    nop\n    ret\n")
+    (tmp_path / "sprite.asm").write_text("; cabecalho sprite\nVDP_INIT:\n    nop\n    ret\n")
+    principal = tmp_path / "jogo.asm"
+    principal.write_text(
+        '    org 4000h\n'
+        '    INCLUDE "vdp.asm"\n'
+        '    INCLUDE "sprite.asm"\n'
+    )
+
+    r = rodar(str(principal), "-o", str(tmp_path / "j.rom"))
+
+    assert r.returncode == 1
+    assert "sprite.asm:2" in r.stderr, r.stderr    # segunda definicao
+    assert "vdp.asm:2" in r.stderr, r.stderr       # primeira definicao, citada
+    assert "VDP_INIT" in r.stderr
+    assert not (tmp_path / "j.rom").exists(), "nao deve escrever ROM em caso de erro"
+
+
 def test_erro_dentro_de_include_aponta_o_modulo(tmp_path):
     (tmp_path / "rt.asm").write_text("; cabecalho\n    ld hl,SUMIDO\n")
     principal = tmp_path / "jogo.asm"

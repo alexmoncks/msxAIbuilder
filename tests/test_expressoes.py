@@ -108,6 +108,49 @@ def test_constante_hex_terminada_em_0b_nao_e_corrompida_pela_normalizacao_de_cai
     assert binario[0] == 0x21 and binario[1] == 0x0B and binario[2] == 0xC0
 
 
+def test_label_redefinido_e_erro_citando_a_primeira_definicao():
+    """Rodada de correcao 2 da Tarefa 5: a correcao de caixa da rodada 1
+    expos um buraco maior -- label duplicado (de qualquer caixa) era
+    aceito em silencio, a segunda definicao vencia, e toda referencia ia
+    para ela. O escopo de '@@' so protege LOCAIS; isto fecha o caso GLOBAL
+    (dois modulos do runtime que declarem o mesmo simbolo, ex.: VDP_INIT).
+    """
+    with pytest.raises(MontagemError) as exc:
+        montar("    org 4000h\nLOOP:\n    nop\nLOOP:\n    nop\n")
+    msg = str(exc.value)
+    assert "linha 4" in msg or ":4" in msg      # segunda definicao (LOOP: na linha 4)
+    assert "linha 2" in msg or ":2" in msg      # primeira definicao, citada (LOOP: na linha 2)
+    assert "LOOP" in msg
+
+
+def test_duas_grafias_de_caixa_do_mesmo_label_e_erro():
+    """'Loop:' e 'LOOP:' sao o MESMO simbolo depois da correcao de
+    case-folding da rodada 1 -- portanto tambem precisam colidir como
+    redefinicao, nao como dois labels diferentes.
+    """
+    with pytest.raises(MontagemError) as exc:
+        montar("    org 4000h\nLoop:\n    nop\nLOOP:\n    nop\n")
+    assert "LOOP" in str(exc.value)
+
+
+def test_muitos_labels_distintos_continuam_montando():
+    """Prova de que a deteccao de redefinicao e DENTRO de uma passagem, nao
+    ENTRE passagens -- do contrario a segunda passagem (que redefine todo
+    label de novo) acusaria falso-positivo para absolutamente qualquer
+    fonte com mais de um label, e nada montaria.
+    """
+    binario = montar(
+        "    org 4000h\n"
+        "A:\n    nop\n"
+        "B:\n    nop\n"
+        "C:\n    nop\n"
+        "D:\n    jp A\n"
+        "E:\n    jp B\n"
+        "F:\n    jp C\n"
+    )
+    assert len(binario) == 3 + 3 * 3   # 3 NOPs + 3 JP (3 bytes cada)
+
+
 def test_equ_com_dollar_e_referencia_adiante_resolve_igual_nas_duas_passagens():
     """Regressao recomendada na revisao: o revisor verificou empiricamente que
     EQU referenciando '$' e seguro entre passagens (current_address e
