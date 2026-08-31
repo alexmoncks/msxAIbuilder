@@ -9,6 +9,8 @@ import struct
 import sys
 from typing import Dict, List, Tuple, Optional
 
+from msxasm.errors import MontagemError
+
 _LOOKS_LIKE_CODE = re.compile(
     r'^(ld|call|ret|reti|retn|jr|jp|out|in|xor|or|and|cp|add|adc|sub|sbc|inc|dec|'
     r'push|pop|djnz|neg|nop|ex|exx|set|res|bit|rl|rr|rlc|rrc|sla|sra|srl|rla|rra|'
@@ -37,6 +39,7 @@ class Z80Assembler:
             i = 0
             while i < len(lines):
                 line = lines[i]
+                self.linha_atual = i + 1
                 stripped = line.strip()
                 if not stripped or stripped.startswith(';'):
                     i += 1
@@ -93,6 +96,12 @@ class Z80Assembler:
                     code = self._encode(stripped)
                     self.output.extend(code)
                     self.current_address += len(code)
+                except MontagemError:
+                    # Simbolo inexistente na ultima passagem: erro real, nao
+                    # instrucao mal-codificada. Nao vira string acumulada em
+                    # self.erros para sair como SystemExit -- propaga direto
+                    # como MontagemError, com a linha de origem.
+                    raise
                 except Exception as e:
                     msg = str(e)
                     if self.pass_no == self.max_passes:
@@ -152,11 +161,17 @@ class Z80Assembler:
         e = re.sub(r'(?<![0-9A-Fx])([01]+)B\b', lambda m: str(int(m.group(1), 2)), e)
         try:
             return int(eval(e, {"__builtins__": {}}, {}))
-        except:
-            # Silenciar isso foi o que deixou o bug acima invisivel por versoes.
+        except Exception:
+            # Na passagem 1 referencias adiante ainda nao existem: devolver 0 e
+            # correto, a passagem 2 resolve. Na ultima passagem, nao resolver
+            # significa que o simbolo nao existe -- e devolver 0 em silencio
+            # produz uma ROM que monta e trava.
             if self.pass_no == self.max_passes:
-                print(f"  ASM WARN: expressao nao avaliada, virou 0 -> {expr!r} "
-                      f"(apos substituicoes: {e!r})", file=sys.stderr)
+                raise MontagemError(
+                    f"expressao nao pode ser avaliada: {expr!r} "
+                    f"(apos substituicao de simbolos: {e!r})",
+                    linha=getattr(self, "linha_atual", None),
+                )
             return 0
 
     def _parse_nums(self, s: str) -> List[int]:
