@@ -61,18 +61,41 @@ class Banco:
 _MAPPER = re.compile(r"^\s*MAPPER\s+(\w+)\s*(?:,\s*(\S+))?\s*$", re.IGNORECASE)
 _BANK = re.compile(r"^\s*BANK\s+(\d+)\s*(?:WINDOW\s+(\S+))?\s*$", re.IGNORECASE)
 
+# Deteccao de diretiva malformada: a linha comeca com a PALAVRA "MAPPER" ou
+# "BANK" (\b nos dois lados evita casar um identificador que apenas COMECA
+# com essas letras, tipo 'BANK_TABLE:') mas nao casa a forma valida acima.
+# O lookahead negativo '(?!\s*:)' exclui a sintaxe de LABEL ('BANK: DB 0')
+# -- ali "BANK" e o NOME de um rotulo, nao a diretiva. Sem esta checagem,
+# 'BANK ABC' ou 'MAPPER KONAMI 64K' (sem virgula) nao casam nenhuma das
+# regexes acima e caem silenciosamente como linha de codigo comum: o banco
+# corrente nunca muda e os bytes seguintes vao parar no banco/janela
+# errados sem nenhum aviso (achado da revisao da Tarefa 8, rodada 1).
+_MAPPER_PALAVRA = re.compile(r"^\s*MAPPER\b(?!\s*:)", re.IGNORECASE)
+_BANK_PALAVRA = re.compile(r"^\s*BANK\b(?!\s*:)", re.IGNORECASE)
 
-def _numero(texto: str) -> int:
+
+def _numero(texto: str, *, linha: int | None, arquivo: str | None) -> int:
     t = texto.strip().upper()
-    if t.endswith("K"):
-        return int(t[:-1]) * 1024
-    if t.endswith("M"):
-        return int(t[:-1]) * 1024 * 1024
-    if t.endswith("H"):
-        return int(t[:-1], 16)
-    if t.startswith("0X"):
-        return int(t, 16)
-    return int(t, 10)
+    try:
+        if t.endswith("K"):
+            return int(t[:-1]) * 1024
+        if t.endswith("M"):
+            return int(t[:-1]) * 1024 * 1024
+        if t.endswith("H"):
+            return int(t[:-1], 16)
+        if t.startswith("0X"):
+            return int(t, 16)
+        return int(t, 10)
+    except ValueError:
+        # Mesma classe de furo que a Tarefa 7 fechou em bss.py: um operando
+        # numerico malformado (tamanho de MAPPER, valor de WINDOW) nao pode
+        # escapar como ValueError cru -- isso atravessaria o "except
+        # MontagemError" da CLI como traceback puro, sem arquivo nem linha
+        # (achado da revisao da Tarefa 8, rodada 1).
+        raise MontagemError(
+            f"numero invalido: {texto!r}",
+            linha=linha, arquivo=arquivo,
+        ) from None
 
 
 def hint_de_arquivo(nome_base: str, layout: Layout) -> str:
@@ -116,7 +139,7 @@ def particionar(linhas: list[Linha]) -> tuple[Layout, int, dict[int, Banco]]:
                 )
             layout = LAYOUTS[nome]
             if m.group(2):
-                tamanho = _numero(m.group(2))
+                tamanho = _numero(m.group(2), linha=linha.numero, arquivo=linha.arquivo)
                 teto = layout.max_bancos * layout.tamanho_banco if layout.tamanho_banco else tamanho
                 if tamanho > teto:
                     raise MontagemError(
@@ -126,6 +149,13 @@ def particionar(linhas: list[Linha]) -> tuple[Layout, int, dict[int, Banco]]:
                         linha=linha.numero, arquivo=linha.arquivo,
                     )
             continue
+
+        if _MAPPER_PALAVRA.match(codigo):
+            raise MontagemError(
+                f"sintaxe invalida em MAPPER: {linha.texto.strip()!r} "
+                f"(esperado: 'MAPPER NOME' ou 'MAPPER NOME, TAMANHO')",
+                linha=linha.numero, arquivo=linha.arquivo,
+            )
 
         m = _BANK.match(codigo)
         if m:
@@ -148,7 +178,7 @@ def particionar(linhas: list[Linha]) -> tuple[Layout, int, dict[int, Banco]]:
                     linha=linha.numero, arquivo=linha.arquivo,
                 )
             if m.group(2):
-                janela = _numero(m.group(2))
+                janela = _numero(m.group(2), linha=linha.numero, arquivo=linha.arquivo)
                 if janela not in layout.janelas:
                     validas = ", ".join(f"0x{j:04X}" for j in layout.janelas)
                     raise MontagemError(
@@ -165,6 +195,13 @@ def particionar(linhas: list[Linha]) -> tuple[Layout, int, dict[int, Banco]]:
             else:
                 bancos[atual] = Banco(atual, janela, [])
             continue
+
+        if _BANK_PALAVRA.match(codigo):
+            raise MontagemError(
+                f"sintaxe invalida em BANK: {linha.texto.strip()!r} "
+                f"(esperado: 'BANK NUMERO' ou 'BANK NUMERO WINDOW ENDERECO')",
+                linha=linha.numero, arquivo=linha.arquivo,
+            )
 
         if atual not in bancos:
             bancos[atual] = Banco(atual, _janela_padrao(layout, atual), [])

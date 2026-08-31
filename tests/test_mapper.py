@@ -89,3 +89,40 @@ def test_fonte_sem_mapper_e_flat():
     layout, tamanho, bancos = particionar(linhas("    org 4000h", "    ret"))
     assert layout.nome == "FLAT"
     assert set(bancos) == {0}
+
+
+# Rodada de correcao 1: _numero() nao pode deixar ValueError escapar cru, e
+# uma diretiva MAPPER/BANK malformada nao pode ser tratada como codigo
+# comum em silencio -- a mesma classe de furo que a Tarefa 7 corrigiu em
+# bss.py, reaberta aqui porque o codigo veio verbatim do mesmo brief.
+
+def test_janela_nao_numerica_e_montagem_error_com_arquivo_e_linha():
+    with pytest.raises(MontagemError) as exc:
+        particionar(linhas("    MAPPER KONAMI, 64K", "    BANK 1 WINDOW ZZZZ"))
+    assert exc.value.arquivo == "t.asm"
+    assert exc.value.linha == 2
+
+
+def test_tamanho_de_mapper_malformado_e_montagem_error_com_arquivo_e_linha():
+    with pytest.raises(MontagemError) as exc:
+        particionar(linhas("    MAPPER KONAMI, 64X"))
+    assert exc.value.arquivo == "t.asm"
+    assert exc.value.linha == 1
+
+
+def test_bank_com_operando_nao_numerico_e_erro_de_sintaxe_nao_silencio():
+    with pytest.raises(MontagemError) as exc:
+        particionar(linhas("    MAPPER KONAMI, 64K", "    BANK ABC"))
+    assert exc.value.linha == 2
+    assert exc.value.arquivo == "t.asm"
+
+
+def test_mapper_sem_virgula_antes_do_tamanho_tambem_e_erro_de_sintaxe():
+    # Forma malformada diferente das anteriores (falta a virgula, nao um
+    # numero invalido) -- prova que a protecao cobre a CLASSE de diretiva
+    # malformada, tanto em MAPPER quanto em BANK, nao so os dois literais
+    # que o revisor reproduziu.
+    with pytest.raises(MontagemError) as exc:
+        particionar(linhas("    MAPPER KONAMI 64K"))
+    assert exc.value.linha == 1
+    assert exc.value.arquivo == "t.asm"
