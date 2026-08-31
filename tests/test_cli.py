@@ -479,3 +479,293 @@ def test_banco_fora_do_tamanho_pedido_por_size_falha_com_mensagem_clara(tmp_path
     assert r.returncode == 1
     assert "banco 100" in r.stderr.lower()
     assert not saida.exists(), "nao deve escrever ROM em caso de erro"
+
+
+# ---------------------------------------------------------------------------
+# Leva final de correcao (revisao da branch inteira). Cada teste abaixo
+# falharia sem o conserto que ele acompanha.
+
+
+def test_org_do_fonte_divergindo_do_org_padrao_ainda_monta(tmp_path):
+    """Regressao da Tarefa 9, no caminho de invocacao PADRAO: a linha 'org'
+    sintetica entrava sempre e o 'org' do fonte caia no ramo de
+    preenchimento, zero-preenchendo ate estourar o cartucho ('binario com
+    16385 bytes nao cabe no cartucho de 16384'). Duas linhas de assembly.
+    """
+    fonte = tmp_path / "org8.asm"
+    fonte.write_text("    org 8000h\n    ret\n")
+    saida = tmp_path / "org8.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "16K")
+
+    assert r.returncode == 0, r.stderr
+    binario = saida.read_bytes()
+    assert len(binario) == 16384
+    assert binario[:2] == bytes([0xC9, 0xFF])
+
+
+def test_size_em_grafia_hexadecimal_do_assembler_e_aceito(tmp_path):
+    """'4000h' e a grafia hexadecimal que o proprio assembler usa em todo
+    lugar (0C000h, BSS 0C000h, WINDOW 8000h). A pessoa digitava a sintaxe da
+    ferramenta e recebia um traceback de Python.
+    """
+    fonte = tmp_path / "t.asm"
+    fonte.write_text("    org 4000h\n    ret\n")
+    saida = tmp_path / "t.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "4000h", "--org", "4000h")
+
+    assert r.returncode == 0, r.stderr
+    assert saida.stat().st_size == 0x4000
+
+
+def test_size_malformado_sai_como_mensagem_limpa_nao_traceback(tmp_path):
+    fonte = tmp_path / "t.asm"
+    fonte.write_text("    ret\n")
+
+    r = rodar(str(fonte), "-o", str(tmp_path / "t.rom"), "--size", "ZZZ")
+
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "--size" in r.stderr
+    assert not (tmp_path / "t.rom").exists()
+
+
+def test_org_malformado_sai_como_mensagem_limpa_nao_traceback(tmp_path):
+    fonte = tmp_path / "t.asm"
+    fonte.write_text("    ret\n")
+
+    r = rodar(str(fonte), "-o", str(tmp_path / "t.rom"), "--org", "nada")
+
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "--org" in r.stderr
+
+
+def test_fonte_inexistente_sai_como_mensagem_limpa_nao_traceback(tmp_path):
+    r = rodar(str(tmp_path / "nao_existe.asm"), "-o", str(tmp_path / "t.rom"))
+
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "nao_existe.asm" in r.stderr
+
+
+def test_diretorio_de_saida_inexistente_sai_como_mensagem_limpa(tmp_path):
+    fonte = tmp_path / "t.asm"
+    fonte.write_text("    org 4000h\n    ret\n")
+
+    r = rodar(str(fonte), "-o", str(tmp_path / "nao" / "existe" / "t.rom"))
+
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr, r.stderr
+
+
+def test_incbin_emite_os_bytes_e_nao_desloca_os_labels_seguintes(tmp_path):
+    """A diretiva era RECONHECIDA pelo regex e ignorada por _directive: nada
+    era emitido, todo label depois dela saia deslocado, e o codigo de saida
+    era 0. Unico ponto da branch que aceitava corromper enderecos em
+    silencio -- contra a regra que abre errors.py.
+    """
+    (tmp_path / "dados.bin").write_bytes(bytes([0xDE, 0xAD, 0xBE, 0xEF]))
+    fonte = tmp_path / "t.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        'INICIO: db "AB"\n'
+        '    INCBIN "dados.bin"\n'
+        "FIM:    ret\n"
+    )
+    saida = tmp_path / "t.rom"
+    mapa = tmp_path / "t.map"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "8K", "--bank-map", str(mapa))
+
+    assert r.returncode == 0, r.stderr
+    assert saida.read_bytes()[:7] == bytes([0x41, 0x42, 0xDE, 0xAD, 0xBE, 0xEF, 0xC9])
+    assert "0x4006  FIM" in mapa.read_text(encoding="utf-8"), \
+        "FIM depois de 2 bytes de db mais 4 de INCBIN"
+
+
+def test_incbin_resolve_pelo_include_path(tmp_path):
+    """Mesma regra do INCLUDE: relativo ao arquivo que contem a linha
+    primeiro, depois pelo search path do -I.
+    """
+    ativos = tmp_path / "ativos"
+    ativos.mkdir()
+    (ativos / "tiles.bin").write_bytes(bytes([0x01, 0x02]))
+    fonte = tmp_path / "t.asm"
+    fonte.write_text('    org 4000h\n    INCBIN "tiles.bin"\n')
+    saida = tmp_path / "t.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "8K", "-I", str(ativos))
+
+    assert r.returncode == 0, r.stderr
+    assert saida.read_bytes()[:2] == bytes([0x01, 0x02])
+
+
+def test_incbin_de_arquivo_ausente_falha_com_arquivo_e_linha(tmp_path):
+    fonte = tmp_path / "t.asm"
+    fonte.write_text('    org 4000h\n    INCBIN "sumiu.bin"\n')
+    saida = tmp_path / "t.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "8K")
+
+    assert r.returncode == 1
+    assert "t.asm:2" in r.stderr, r.stderr
+    assert "sumiu.bin" in r.stderr
+    assert not saida.exists(), "nao deve escrever ROM em caso de erro"
+
+
+def test_label_local_dentro_de_bss_resolve_ponta_a_ponta(tmp_path):
+    """Composicao labels x bss x legacy. Dois defeitos empilhados: o regex de
+    EQU nao aceitava '@' (o EQU sintetico caia no caminho de instrucao e
+    morria como 'Unknown instruction'), e corrigido isso, _eval comia o
+    prefixo -- 'MUSICA@@TICK' virava '16384@@TICK' -- porque labels e
+    equates eram substituidos em dois lacos separados.
+    """
+    fonte = tmp_path / "t.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "MUSICA:\n"
+        "    BSS 0C000h\n"
+        "@@ptr:  DS 2\n"
+        "@@tick: DS 1\n"
+        "    ENDBSS\n"
+        "    ld a,(@@tick)\n"
+        "    ret\n"
+    )
+    saida = tmp_path / "t.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--size", "8K")
+
+    assert r.returncode == 0, r.stderr
+    assert saida.read_bytes()[:4] == bytes([0x3A, 0x02, 0xC0, 0xC9]), \
+        "ld a,(0C002h): @@ptr ocupa C000-C001, @@tick cai em C002"
+
+
+def test_erro_em_simbolo_de_bss_aponta_a_linha_real_do_fonte(tmp_path):
+    """Procedencia real nas linhas EQU sinteticas. Com '<bss>:N' o erro nao
+    tinha caminho de volta ao fonte que a pessoa escreveu.
+    """
+    fonte = tmp_path / "t.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "    BSS 0C000h\n"
+        "ESTADO: DS 1\n"
+        "    ENDBSS\n"
+        "ESTADO:\n"
+        "    ret\n"
+    )
+
+    r = rodar(str(fonte), "-o", str(tmp_path / "t.rom"))
+
+    assert r.returncode == 1
+    assert "t.asm:3" in r.stderr, r.stderr
+    assert "<bss>" not in r.stderr, r.stderr
+
+
+def test_call_do_banco_paginado_para_o_residente_monta(tmp_path):
+    """Cada banco ganhava um Z80Assembler novo com tabela de simbolos vazia,
+    entao o call para o trampolim residente -- que esta SEMPRE mapeado e e o
+    padrao obrigatorio da Konami -- nao montava. O recurso MegaROM estava
+    sintaticamente pronto e semanticamente inutilizavel.
+    """
+    fonte = tmp_path / "cross.asm"
+    fonte.write_text(
+        "    MAPPER KONAMI, 32K\n"
+        "    BANK 0\n"
+        '    db "AB"\n'
+        "RT_INIT:\n"
+        "    ret\n"
+        "    BANK 1 WINDOW 8000h\n"
+        "    call RT_INIT\n"
+    )
+    saida = tmp_path / "cross.rom"
+
+    r = rodar(str(fonte), "-o", str(saida))
+
+    assert r.returncode == 0, r.stderr
+    b = saida.read_bytes()
+    assert b[8192:8195] == bytes([0xCD, 0x02, 0x40]), "call RT_INIT -> 0x4002"
+
+
+def test_mapa_de_bancos_nao_perde_labels_homonimos(tmp_path):
+    fonte = tmp_path / "homo.asm"
+    fonte.write_text(
+        "    MAPPER KONAMI, 32K\n"
+        "    BANK 0\n"
+        '    db "AB"\n'
+        "LOOP:\n"
+        "    nop\n"
+        "    BANK 1 WINDOW 8000h\n"
+        "LOOP:\n"
+        "    nop\n"
+    )
+    mapa = tmp_path / "homo.map"
+
+    r = rodar(str(fonte), "-o", str(tmp_path / "homo.rom"), "--bank-map", str(mapa))
+
+    assert r.returncode == 0, r.stderr
+    linhas_mapa = [l for l in mapa.read_text(encoding="utf-8").splitlines()
+                   if l.strip() and not l.startswith("#")]
+    assert sorted(linhas_mapa) == ["  0  0x4002  LOOP", "  1  0x8000  LOOP"]
+    assert "2 labels" in r.stdout, r.stdout
+
+
+def test_cadeia_completa_include_macro_local_bss_e_bancos(tmp_path):
+    """As seis etapas juntas -- expandir -> expandir_macros ->
+    expandir_locais -> extrair -> particionar -> montar -- com assercao de
+    BYTES, nao de codigo de saida. Nenhum teste da suite passava por mais de
+    duas etapas ao mesmo tempo, e foi exatamente ai que a revisao final
+    achou os defeitos que as revisoes por tarefa nao viam.
+    """
+    (tmp_path / "rt.asm").write_text(
+        "    BSS 0C000h\n"
+        "MUS_PTR:  DS 2\n"
+        "MUS_TICK: DS 1\n"
+        "    ENDBSS\n"
+        "    MACRO ESPERA n      ; gasta n voltas, depois segue\n"
+        "    ld b,n\n"
+        "@@laco:\n"
+        "    djnz @@laco\n"
+        "    ENDM\n"
+        "RT_INIT:\n"
+        "    ret\n"
+    )
+    fonte = tmp_path / "main.asm"
+    fonte.write_text(
+        "    MAPPER KONAMI, 32K\n"
+        "    BANK 0\n"
+        '    INCLUDE "rt.asm"\n'
+        "INICIO:\n"
+        "    ld a,(MUS_TICK)\n"
+        "    ESPERA 10\n"
+        "    ESPERA 20\n"
+        "    BANK 1 WINDOW 8000h\n"
+        "OUTRO:\n"
+        "    ESPERA 30\n"
+        "    ld a,(MUS_PTR)\n"
+        "    call RT_INIT\n"
+    )
+    saida = tmp_path / "main.rom"
+
+    r = rodar(str(fonte), "-o", str(saida))
+
+    assert r.returncode == 0, r.stderr
+    b = saida.read_bytes()
+    assert len(b) == 32768
+    # Banco 0: ret (RT_INIT), ld a,(0C002h) (MUS_TICK, do BSS do modulo
+    # incluido), e as duas expansoes de ESPERA com sufixos distintos.
+    assert b[0:12] == bytes([
+        0xC9,                    # RT_INIT: ret
+        0x3A, 0x02, 0xC0,        # ld a,(MUS_TICK)
+        0x06, 0x0A, 0x10, 0xFE,  # ESPERA 10  -> ld b,10 / djnz @@laco_m1
+        0x06, 0x14, 0x10, 0xFE,  # ESPERA 20  -> ld b,20 / djnz @@laco_m2
+    ])
+    # Banco 1: terceira expansao da macro (sufixo unico ATRAVES dos bancos),
+    # simbolo de BSS visivel aqui tambem, e call para o residente.
+    assert b[8192:8203] == bytes([
+        0x06, 0x1E, 0x10, 0xFE,  # ESPERA 30 -> ld b,30 / djnz @@laco_m3
+        0x3A, 0x00, 0xC0,        # ld a,(MUS_PTR)
+        0xCD, 0x00, 0x40,        # call RT_INIT (banco residente)
+        0xFF,                    # preenchimento
+    ])

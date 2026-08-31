@@ -41,8 +41,8 @@ def test_banco_monta_no_endereco_da_sua_janela():
         0: banco(0, 0x4000, "RESIDENTE:", "    ret"),
         3: banco(3, 0xA000, "DADOS:", "    db 1"),
     }, [])
-    assert mapa["RESIDENTE"] == (0, 0x4000)
-    assert mapa["DADOS"] == (3, 0xA000), "banco 3 declarou WINDOW 0A000h"
+    assert mapa["RESIDENTE"] == [(0, 0x4000)]
+    assert mapa["DADOS"] == [(3, 0xA000)], "banco 3 declarou WINDOW 0A000h"
 
 
 def test_banco_que_nao_cabe_na_janela_e_erro():
@@ -51,3 +51,84 @@ def test_banco_que_nao_cabe_na_janela_e_erro():
         montar(layout, 32768, {1: banco(1, 0x6000, "    ds 9000")}, [])
     assert "banco 1" in str(exc.value).lower()
     assert "8192" in str(exc.value)
+
+
+def test_org_do_fonte_manda_e_nao_dispara_zero_fill():
+    """Regressao da Tarefa 9: a linha 'org' sintetica entrava SEMPRE, na
+    frente de tudo. Se o fonte declarava o seu proprio 'org' com valor
+    diferente, o ramo de preenchimento de _directive ('if v >
+    current_address and current_address > 0') zero-preenchia a diferenca --
+    duas linhas de assembly viravam 16385 bytes e o cartucho estourava.
+    """
+    img, _ = montar(LAYOUTS["FLAT"], 16384,
+                    {0: banco(0, 0x4000, "    org 8000h", "    ret")},
+                    [], org=0x4000)
+    assert len(img) == 16384
+    assert img[0] == 0xC9, "o 'ret' tem que ser o primeiro byte, sem zero-fill antes"
+    assert img[1] == 0xFF
+
+
+def test_org_injetado_continua_valendo_quando_o_fonte_se_cala():
+    """O que a injecao resolve nao pode ser perdido: um banco paginado so
+    tem WINDOW na diretiva BANK, nunca um 'org' escrito a mao, e sem a
+    injecao todo label dele sai com o endereco errado.
+    """
+    _, mapa = montar(LAYOUTS["KONAMI"], 32768,
+                     {1: banco(1, 0x8000, "DADOS:", "    db 1")}, [])
+    assert mapa["DADOS"] == [(1, 0x8000)]
+
+
+def test_simbolo_do_banco_residente_e_visivel_dos_outros_bancos():
+    """A spec 4.4 diz que simbolo passa a ser (banco, endereco). O que
+    existia eram tabelas por banco, isoladas: um 'call RT_INIT' do banco 1
+    para o trampolim RESIDENTE -- que esta sempre mapeado e e obrigatorio,
+    porque codigo que pagina nao pode ser paginado embaixo de si mesmo --
+    simplesmente nao montava.
+    """
+    layout = LAYOUTS["KONAMI"]
+    img, mapa = montar(layout, 32768, {
+        0: banco(0, 0x4000, '    db "AB"', "RT_INIT:", "    ret"),
+        1: banco(1, 0x8000, "    call RT_INIT"),
+    }, [])
+    assert mapa["RT_INIT"] == [(0, 0x4002)]
+    assert list(img[8192:8195]) == [0xCD, 0x02, 0x40], "call RT_INIT -> 0x4002"
+
+
+def test_simbolo_de_banco_paginado_continua_invisivel_de_outro_banco():
+    """O oposto tem que continuar falhando: um call direto para um banco que
+    pode nao estar mapeado e justamente o que a spec quer recusar.
+    """
+    layout = LAYOUTS["KONAMI"]
+    with pytest.raises(MontagemError) as exc:
+        montar(layout, 32768, {
+            0: banco(0, 0x4000, '    db "AB"'),
+            1: banco(1, 0x8000, "ALVO:", "    ret"),
+            2: banco(2, 0x8000, "    call ALVO"),
+        }, [])
+    assert "ALVO" in str(exc.value)
+
+
+def test_label_local_vence_o_simbolo_semeado_do_residente():
+    layout = LAYOUTS["KONAMI"]
+    img, mapa = montar(layout, 32768, {
+        0: banco(0, 0x4000, '    db "AB"', "LOOP:", "    jp LOOP"),
+        1: banco(1, 0x8000, "    nop", "LOOP:", "    jp LOOP"),
+    }, [])
+    assert list(img[8193:8196]) == [0xC3, 0x01, 0x80], \
+        "jp LOOP no banco 1 aponta para o LOOP do banco 1, nao para o do residente"
+
+
+def test_mapa_guarda_todas_as_definicoes_de_um_nome_homonimo():
+    """O mapa e a unica ferramenta de depuracao de MegaROM que a ferramenta
+    emite. 'LOOP:' no banco 0 e 'LOOP:' no banco 1 e legitimo (bancos sao
+    espacos de endereco separados) e produzia UMA entrada, a do ultimo banco
+    processado: resposta errada com cara de certa.
+    """
+    layout = LAYOUTS["KONAMI"]
+    _, mapa = montar(layout, 32768, {
+        0: banco(0, 0x4000, "INICIO:", "    nop", "LOOP:", "    nop"),
+        1: banco(1, 0x8000, "LOOP:", "    nop"),
+    }, [])
+    assert sorted(mapa["LOOP"]) == [(0, 0x4001), (1, 0x8000)]
+    assert mapa["INICIO"] == [(0, 0x4000)]
+    assert sum(len(v) for v in mapa.values()) == 3
