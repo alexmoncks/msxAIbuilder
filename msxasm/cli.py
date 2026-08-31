@@ -8,6 +8,7 @@ from msxasm.errors import MontagemError
 from msxasm.include import expandir
 from msxasm.labels import expandir_locais
 from msxasm.legacy import Z80Assembler
+from msxasm.macro import expandir_macros
 
 PREENCHIMENTO = 0xFF
 
@@ -38,10 +39,14 @@ def main(argv: list[str] | None = None) -> int:
         asm.include_paths = list(args.include_path)
         asm.arquivo_base = args.fonte
 
-        # Cadeia de preparo do fonte, antes da montagem. Tarefa 6 insere
-        # expandir_macros() aqui entre expandir() e expandir_locais(); a
-        # Tarefa 7 acrescenta a extracao de BSS depois.
+        # Cadeia de preparo do fonte, antes da montagem. Macros expandem
+        # antes do escopo de labels locais: o corpo da macro gera
+        # '@@espera_m1', e so entao expandir_locais aplica o escopo global
+        # sobre o texto ja sufixado. Invertida, '@@' seria escopado antes
+        # de o sufixo por expansao existir, e duas invocacoes da mesma
+        # macro colidiriam. A Tarefa 7 acrescenta a extracao de BSS depois.
         linhas = expandir(args.fonte, args.include_path)
+        linhas = expandir_macros(linhas)
         linhas = expandir_locais(linhas)
         asm.linhas_fonte = linhas
         binario = asm.assemble("\n".join(l.texto for l in linhas))

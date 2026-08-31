@@ -127,6 +127,42 @@ def test_local_em_caixa_mista_resolve_ponta_a_ponta(tmp_path):
     assert binario[2] == 0xC9          # RET
 
 
+def test_macro_invocada_duas_vezes_monta_sem_erro_de_label_redefinido(tmp_path):
+    """Tarefa 6: prova ponta a ponta de que o sufixo por expansao funciona.
+
+    expandir_macros roda ANTES de expandir_locais (ver comentario na cadeia
+    em cli.py). Sem o sufixo '_m{contador}' por expansao, as duas chamadas
+    de ATRASO abaixo gerariam a mesma '@@espera:' duas vezes sob o mesmo
+    escopo global (INICIO), e a deteccao de label redefinido da Tarefa 5
+    (MontagemError dentro da mesma passagem) pegaria a colisao -- prova de
+    que, sem o sufixo, isto quebraria. Com o sufixo, cada expansao produz
+    um label distinto ('INICIO@@espera_m1', 'INICIO@@espera_m2') e a
+    montagem completa sem erro.
+    """
+    fonte = tmp_path / "atraso.asm"
+    fonte.write_text(
+        "    org 4000h\n"
+        "    MACRO ATRASO n\n"
+        "    ld b,n\n"
+        "@@espera:\n"
+        "    djnz @@espera\n"
+        "    ENDM\n"
+        "INICIO:\n"
+        "    ATRASO 5\n"
+        "    ATRASO 10\n"
+        "    ret\n"
+    )
+    saida = tmp_path / "atraso.rom"
+
+    r = rodar(str(fonte), "-o", str(saida), "--org", "0x4000", "--size", "8K")
+
+    assert r.returncode == 0, r.stderr
+    binario = saida.read_bytes()
+    # ld b,5 / djnz $ / ld b,10 / djnz $ / ret
+    assert binario[0:6] == bytes([0x06, 0x05, 0x10, 0xFE, 0x06, 0x0A])
+    assert binario[6:9] == bytes([0x10, 0xFE, 0xC9])
+
+
 def test_locais_identicos_sob_globais_diferentes_continuam_validos(tmp_path):
     """Rodada de correcao 2 da Tarefa 5: a deteccao de label global
     redefinido NAO pode confundir '@@LOOP' definido sob 'PSG_ON:' com
