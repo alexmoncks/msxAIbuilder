@@ -12,6 +12,10 @@ variados.
 **Critério de sucesso da v1:** o Pong v24 reescrito em cima da biblioteca,
 provado equivalente ao original por comparação de traço de execução.
 
+Uma segunda trilha, de composite por blitter do V9938 para jogos mais
+elaborados, está especificada em [`docs/msx2-spec-grafica.md`](../../msx2-spec-grafica.md)
+e resumida na seção 6.2. Ela **não** faz parte da v1 — ver seções 10 e 11.
+
 ## 2. Decisões
 
 | Decisão | Escolha | Razão |
@@ -43,7 +47,9 @@ msxAIbuilder/
 │       ├── header.asm  mapper.asm  vdp.asm   screen.asm
 │       ├── sprite.asm  text.asm    draw.asm  lz.asm
 │       ├── psg.asm     ym2413.asm  music.asm sfx.asm
-│       └── input.asm
+│       ├── input.asm
+│       └── (pós-v1) blit.asm  page.asm  palette.asm
+│                    collide.asm  anim.asm
 ├── games/
 │   ├── pong/      game.asm  build.py  art/  midi/
 │   └── example/
@@ -194,7 +200,7 @@ hardware qual banco está ativo. O runtime mantém `PG_CUR_B/C/D` em `BSS`, e
 
 ## 6. Runtime Z80 (`msxbuild/rt/`)
 
-Inventário extraído do Pong v24:
+### 6.1 Inventário extraído do Pong v24
 
 | Módulo | Rotinas de origem |
 |---|---|
@@ -217,6 +223,34 @@ telas de título e fim, tabela de dificuldade.
 Convenções do runtime, uniformes entre módulos: prefixo por módulo nos símbolos
 públicos, `@@` para labels internos, registradores destruídos documentados no
 cabeçalho de cada rotina, variáveis exclusivamente em blocos `BSS`.
+
+### 6.2 Trilha de composite por blitter (pós-v1)
+
+Especificada em [`docs/msx2-spec-grafica.md`](../../msx2-spec-grafica.md):
+desenhar personagens e bosses pelo command engine do V9938 em vez de sprites de
+hardware, com double buffer em páginas de VRAM e sprites usados apenas como
+hitboxes invisíveis.
+
+Módulos adicionais que essa trilha exige. **Nenhum é extração — o Pong v24 não
+toca no command engine** (validado em `msx2-spec-grafica.md` §9.5):
+
+| Módulo | Responsabilidade |
+|---|---|
+| `blit` | Driver do command engine. R#32–R#45, disparo por R#46, espera do bit CE em S#2. `LMMM`+`TIMP` para objeto, `HMMM` para restaurar fundo, `LMMV`/`HMMV` para preenchimento |
+| `page` | Páginas de VRAM e double buffer. Troca da página visível por R#2 no vblank |
+| `palette` | Partição de paleta, fade por tabela pré-calculada, ciclo de cores. R#16 mais duas escritas na porta `#9A` |
+| `collide` | Hitboxes invisíveis (cor 0, `CC=0`). Leitura de S#0 bit 5 uma vez por frame, coordenadas em S#3–S#6, desambiguação por geometria. `SPR_HIDE` usando `Y >= 212` e nunca `216` |
+| `anim` | Tabela de frames com hitboxes embutidas, emitida junto com o bitmap |
+
+Duas regras da spec gráfica viram **rotina do runtime, não convenção
+documentada**, porque convenção se esquece e o bug resultante é silencioso:
+
+- esconder hitbox com `Y >= 212`; `Y = 216` encerra o processamento da lista
+  inteira a partir daquele slot, apagando os sprites seguintes (confirmado em
+  `VDP.js:1930`);
+- contador de raster instrumentado desde o primeiro dia, porque o orçamento de
+  blits por frame **não é mensurável no emulador** (§9.3) e terá de ser fechado
+  no alvo real.
 
 ## 7. `msxbuild` — camada Python
 
@@ -249,6 +283,30 @@ Conversores derivados do que já existe: `bmp2msx.py`, `lz.py`, `midparse.py` e
 
 Na saída, o nome do arquivo carrega o hint de formato quando há mapper
 (seção 5.3).
+
+### 7.1 O que a trilha de blitter acrescenta à camada Python
+
+A spec gráfica empurra trabalho decisivo para o lado Python, e isso é o
+argumento mais forte a favor da escolha híbrida da seção 2:
+
+- **Packer de frames em VRAM.** Empacotar frames de animação nas páginas 2 e 3 e
+  emitir `(src_x, src_y, w, h)` por frame. É bin-packing 2D com orçamento duro:
+  com double buffer sobram 64KB, não 96KB. O packer **falha no build** quando não
+  cabe, em vez de o jogo corromper VRAM em runtime.
+- **Dithering gravado no bitmap.** A spec exige o padrão ancorado nas coordenadas
+  do objeto, nunca gerado em runtime ancorado na tela — senão o padrão "anda" sob
+  o objeto e vira chuvisco. Isso é conversão de asset, e é exatamente o tipo de
+  trabalho que não cabe em assembly.
+- **Hitbox emitida da mesma fonte que o frame.** A spec avisa que, se as
+  coordenadas de sprite forem calculadas em outro lugar, a hitbox descola do
+  desenho durante a animação. O gerador emite bitmap e tabela de hitbox da mesma
+  passagem, tornando o descolamento impossível por construção em vez de por
+  disciplina.
+- **Validador de partição de paleta.** As entradas 14 e 15 são exclusivas do HUD
+  e nunca podem ser tocadas por fade ou ciclo de cores. O build recusa um efeito
+  declarado sobre faixa reservada.
+- **Tabelas de fade.** Curva não linear com mais passos na faixa escura — com 8
+  níveis por canal, fade linear fica visivelmente escadeado.
 
 ## 8. Testes
 
@@ -326,6 +384,10 @@ e a anatomia da ROM têm valor direto aqui), `Dockerfile` e `run.sh`.
 - Port do Pong para MegaROM. Ele permanece flat 32KB na v1.
 - Scroll, mapas de tile e sistema de colisão genérico — entram quando um jogo
   concreto pedir.
+- **A trilha inteira de composite por blitter** (seção 6.2 e
+  `docs/msx2-spec-grafica.md`): `blit`, `page`, `palette`, `collide`, `anim`, o
+  packer de frames em VRAM e o dithering na conversão de asset. Motivo na seção
+  11.
 
 ## 11. Riscos
 
@@ -337,6 +399,23 @@ existe exatamente para pegar isso.
 **Validação de `call` entre bancos é heurística.** O assembler enxerga `call
 SIMBOLO` mas não enxerga `ld hl,SIMBOLO` seguido de `jp (hl)`. A validação pega o
 caso comum, não todos.
+
+**A trilha de blitter é código novo, não extração — e não pode ser validada
+como o resto.** O Pong v24 não toca no command engine (`msx2-spec-grafica.md`
+§9.5), então não há código provado de onde extrair `blit.asm`, `page.asm` ou o
+packer de frames. Some a rede de segurança que justifica a v1 inteira: o gate de
+regressão do Pong prova que a extração não quebrou nada, mas não prova nada
+sobre código que nunca existiu.
+
+Agrava isso o fato de que **o orçamento de ciclos do blitter não é mensurável no
+emulador** (§9.3): o WebMSX estima a duração dos comandos e explicitamente não
+modela a disputa por slots de acesso à VRAM, que é justamente a variável que
+decide quantos objetos cabem em tela. Um design de jogo fechado sobre um número
+saído do emulador pode não caber no hardware.
+
+Por isso a trilha fica fora da v1 e pede um jogo-alvo próprio, com o contador de
+raster instrumentado desde o primeiro dia e medição no alvo real antes de fechar
+densidade de objetos.
 
 **O harness de teste depende de `src/main/**` do WebMSX** carregado via
 `vm.runInContext`. Uma mudança na estrutura interna do emulador quebra os testes;

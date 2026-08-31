@@ -68,6 +68,20 @@ regra de deteccao identica no WebMSX, e o de menor prioridade vence. Uma ROM de
 2 MB seria carregada como ASCII8 em silencio, com as janelas erradas. Por isso o
 builder emite o nome com o hint de formato — `meujogo [Konami].rom`.
 
+## Composite por blitter (planejado, pós-v1)
+
+Uma segunda trilha desenha personagens e bosses pelo **command engine do V9938**
+em vez de sprites de hardware: `LMMM` com operacao logica transparente sobre
+double buffer em paginas de VRAM, com os sprites reservados para hitboxes
+invisiveis nos pontos fracos. Especificacao completa em
+[`docs/msx2-spec-grafica.md`](docs/msx2-spec-grafica.md).
+
+Uma ressalva que a validacao dessa spec produziu e que vale para qualquer
+projeto MSX2: **o orcamento de ciclos do blitter nao e mensuravel em emulador.**
+O WebMSX estima a duracao dos comandos e nao modela a disputa por slots de
+acesso a VRAM — exatamente a variavel que decide quantos objetos cabem em tela.
+Esse numero precisa de hardware real.
+
 ## Testes
 
 O WebMSX entra como submodule em `vendor/webmsx` e roda as ROMs em modo
