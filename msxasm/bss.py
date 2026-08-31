@@ -10,8 +10,10 @@ O que isto substitui: enderecos literais espalhados pelo codigo (0C000h,
 endereco se corrompem mutuamente e nada avisa.
 """
 import re
+from dataclasses import dataclass
 
 from msxasm.errors import MontagemError
+from msxasm.numero import parse as _numero
 from msxasm.source import Linha
 from msxasm.texto import corta_comentario
 
@@ -22,37 +24,48 @@ _RESERVA = re.compile(
 )
 
 
-def _numero(texto: str, *, linha: int | None, arquivo: str | None) -> int:
-    t = texto.strip().upper()
-    try:
-        if t.endswith("H"):
-            return int(t[:-1], 16)
-        if t.startswith("0X"):
-            return int(t, 16)
-        return int(t, 10)
-    except ValueError:
-        # Entrada malformada dentro de um bloco BSS (ex.: base ou tamanho de
-        # DS que nao e numero nenhum) nao pode escapar como ValueError cru --
-        # isso atravessaria o "except MontagemError" da CLI como traceback,
-        # sem arquivo nem linha (achado da revisao: e a mesma classe de furo
-        # que os outros pontos de erro do assembler ja fecham).
-        raise MontagemError(
-            f"numero invalido dentro de BSS: {texto!r}",
-            linha=linha, arquivo=arquivo,
-        ) from None
+@dataclass(frozen=True)
+class Simbolo:
+    """Um simbolo de RAM alocado por um bloco BSS.
+
+    Carrega a PROCEDENCIA REAL (arquivo e numero da linha `NOME: DS n` que
+    o declarou), nao um indice sintetico. A Tarefa 7 gerava as linhas EQU
+    com `arquivo="<bss>"` e um contador, e isso foi deferido como
+    cosmetico -- deixou de ser: quando o EQU sintetico falha ao montar, o
+    erro apontava para `<bss>:1` e nao havia caminho de volta ao fonte que
+    a pessoa escreveu.
+    """
+    nome: str
+    endereco: int
+    tamanho: int
+    arquivo: str
+    numero: int
+
+    @property
+    def origem(self) -> str:
+        return f"{self.arquivo}:{self.numero}"
 
 
-def extrair(linhas: list[Linha], limite: int = 0xFFFF) -> tuple[list[Linha], dict[str, int]]:
+def extrair(linhas: list[Linha],
+            limite: int = 0xFFFF) -> tuple[list[Linha], dict[str, Simbolo]]:
     resto: list[Linha] = []
-    mapa: dict[str, int] = {}
-    # Chave normalizada em maiuscula -> "arquivo:linha" da primeira
-    # declaracao. A comparacao de duplicata usa esta chave, nao o nome como
-    # escrito -- a resolucao de label/equate e insensivel a caixa desde a
-    # Tarefa 5 (msxasm.labels), e 'Estado' e 'ESTADO' sao o MESMO simbolo.
-    # Sem normalizar aqui, os dois passavam como simbolos diferentes e
-    # recebiam enderecos de RAM DIFERENTES em silencio -- a classe exata de
-    # corrupcao que o BSS existe para eliminar (achado da revisao).
-    origem: dict[str, str] = {}
+    mapa: dict[str, Simbolo] = {}
+    # Chave normalizada em maiuscula -> Simbolo da primeira declaracao. A
+    # comparacao de duplicata usa esta chave, nao o nome como escrito -- a
+    # resolucao de label/equate e insensivel a caixa desde a Tarefa 5
+    # (msxasm.labels), e 'Estado' e 'ESTADO' sao o MESMO simbolo. Sem
+    # normalizar aqui, os dois passavam como simbolos diferentes e recebiam
+    # enderecos de RAM DIFERENTES em silencio -- a classe exata de corrupcao
+    # que o BSS existe para eliminar (achado da revisao).
+    declarados: dict[str, Simbolo] = {}
+    # Faixas [inicio, fim) ja alocadas, na ordem de alocacao. Checar so o
+    # NOME cobre metade do problema: dois modulos que declarem cada um a sua
+    # base (`BSS 0C000h` nos dois, que e exatamente o que o exemplo da spec
+    # 4.3 mostra) recebiam nomes diferentes nos MESMOS enderecos de RAM, sem
+    # erro nenhum -- a ROM monta, roda, e as variaveis dos dois modulos se
+    # corrompem mutuamente. A deteccao de nome duplicado dava a ilusao de
+    # que colisao estava coberta (achado Critical da revisao final).
+    faixas: list[Simbolo] = []
     cursor: int | None = None
     i = 0
 
@@ -75,7 +88,8 @@ def extrair(linhas: list[Linha], limite: int = 0xFFFF) -> tuple[list[Linha], dic
 
         abertura = linhas[i]
         if m.group(1) is not None:
-            cursor = _numero(m.group(1), linha=abertura.numero, arquivo=abertura.arquivo)
+            cursor = _numero(m.group(1), linha=abertura.numero,
+                             arquivo=abertura.arquivo, contexto="dentro de BSS")
         elif cursor is None:
             raise MontagemError(
                 "primeiro bloco BSS precisa declarar o endereco base, ex: BSS 0C000h",
@@ -103,11 +117,13 @@ def extrair(linhas: list[Linha], limite: int = 0xFFFF) -> tuple[list[Linha], dic
                     )
 
                 nome = r.group(1)
-                tamanho = _numero(r.group(2), linha=corpo.numero, arquivo=corpo.arquivo)
+                tamanho = _numero(r.group(2), linha=corpo.numero,
+                                  arquivo=corpo.arquivo, contexto="dentro de BSS")
                 chave = nome.upper()
-                if chave in origem:
+                if chave in declarados:
                     raise MontagemError(
-                        f"simbolo BSS duplicado: {nome} (ja declarado em {origem[chave]})",
+                        f"simbolo BSS duplicado: {nome} "
+                        f"(ja declarado em {declarados[chave].origem})",
                         linha=corpo.numero, arquivo=corpo.arquivo,
                     )
 
@@ -118,8 +134,20 @@ def extrair(linhas: list[Linha], limite: int = 0xFFFF) -> tuple[list[Linha], dic
                         linha=corpo.numero, arquivo=corpo.arquivo,
                     )
 
-                mapa[nome] = cursor
-                origem[chave] = f"{corpo.arquivo}:{corpo.numero}"
+                simbolo = Simbolo(nome=nome, endereco=cursor, tamanho=tamanho,
+                                  arquivo=corpo.arquivo, numero=corpo.numero)
+                anterior = _sobreposto(simbolo, faixas)
+                if anterior is not None:
+                    raise MontagemError(
+                        f"simbolo BSS {nome} ocupa "
+                        f"{_faixa(simbolo)} e sobrepoe {anterior.nome}, que ocupa "
+                        f"{_faixa(anterior)} (declarado em {anterior.origem})",
+                        linha=corpo.numero, arquivo=corpo.arquivo,
+                    )
+
+                mapa[nome] = simbolo
+                declarados[chave] = simbolo
+                faixas.append(simbolo)
                 cursor += tamanho
 
             i += 1
@@ -131,3 +159,23 @@ def extrair(linhas: list[Linha], limite: int = 0xFFFF) -> tuple[list[Linha], dic
             )
 
     return resto, mapa
+
+
+def _faixa(s: Simbolo) -> str:
+    if s.tamanho <= 0:
+        return f"0 bytes em 0x{s.endereco:04X}"
+    return f"0x{s.endereco:04X}..0x{s.endereco + s.tamanho - 1:04X}"
+
+
+def _sobreposto(novo: Simbolo, faixas: list[Simbolo]) -> Simbolo | None:
+    """Primeiro simbolo ja alocado cuja faixa intersecta a de `novo`.
+
+    Reserva de tamanho zero nao ocupa endereco nenhum e por isso nunca
+    sobrepoe -- a comparacao e de intervalos meio-abertos [inicio, fim).
+    """
+    inicio, fim = novo.endereco, novo.endereco + novo.tamanho
+    for outro in faixas:
+        o_inicio, o_fim = outro.endereco, outro.endereco + outro.tamanho
+        if inicio < o_fim and o_inicio < fim:
+            return outro
+    return None

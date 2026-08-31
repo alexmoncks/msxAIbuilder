@@ -141,5 +141,9 @@ def test_simbolo_de_bss_colidindo_com_label_de_rom_e_erro_ponta_a_ponta(tmp_path
     assert r.returncode == 1
     assert "ESTADO" in r.stderr
     assert "d.asm:6" in r.stderr, r.stderr    # o label de codigo que colidiu
-    assert "<bss>" in r.stderr, r.stderr      # onde o simbolo BSS foi injetado
+    # A segunda localizacao e a linha REAL da declaracao BSS ('ESTADO: DS 1',
+    # d.asm:3), nao mais o '<bss>:1' sintetico da Tarefa 7. Sem isso o erro
+    # nao tinha caminho de volta ao fonte que a pessoa escreveu.
+    assert "d.asm:3" in r.stderr, r.stderr
+    assert "<bss>" not in r.stderr, r.stderr
     assert not (tmp_path / "d.rom").exists(), "nao deve escrever ROM em caso de erro"

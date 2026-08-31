@@ -9,6 +9,13 @@ def linhas(*textos: str) -> list[Linha]:
     return [Linha(texto=t, arquivo="t.asm", numero=i) for i, t in enumerate(textos, 1)]
 
 
+def enderecos(mapa) -> dict[str, int]:
+    """extrair() devolve Simbolo (nome, endereco, tamanho, arquivo, numero),
+    nao um int solto: os testes que so olham o endereco passam por aqui.
+    """
+    return {nome: s.endereco for nome, s in mapa.items()}
+
+
 def test_aloca_sequencialmente_a_partir_da_base():
     _, mapa = extrair(linhas(
         "    BSS 0C000h",
@@ -17,7 +24,7 @@ def test_aloca_sequencialmente_a_partir_da_base():
         "MUS_VOZ:  DS 6",
         "    ENDBSS",
     ))
-    assert mapa == {"MUS_PTR": 0xC000, "MUS_TICK": 0xC002, "MUS_VOZ": 0xC003}
+    assert enderecos(mapa) == {"MUS_PTR": 0xC000, "MUS_TICK": 0xC002, "MUS_VOZ": 0xC003}
 
 
 def test_blocos_de_modulos_diferentes_se_concatenam():
@@ -29,7 +36,7 @@ def test_blocos_de_modulos_diferentes_se_concatenam():
         "B: DS 2",
         "    ENDBSS",
     ))
-    assert mapa == {"A": 0xC000, "B": 0xC004}
+    assert enderecos(mapa) == {"A": 0xC000, "B": 0xC004}
 
 
 def test_simbolo_repetido_e_erro():
@@ -114,7 +121,7 @@ def test_comentario_colado_sem_espaco_no_ds_e_apenas_comentario():
         "V: DS 1;comentario",
         "ENDBSS",
     ))
-    assert mapa == {"V": 0xC000}
+    assert enderecos(mapa) == {"V": 0xC000}
 
 
 def test_numero_invalido_dentro_de_bss_e_montagem_error_nao_traceback():
@@ -125,3 +132,74 @@ def test_numero_invalido_dentro_de_bss_e_montagem_error_nao_traceback():
     with pytest.raises(MontagemError) as exc:
         extrair(linhas("BSS ZZZZ", "V: DS 1", "ENDBSS"))
     assert "invalido" in str(exc.value).lower()
+
+
+def test_bases_declaradas_que_se_sobrepoem_sao_erro():
+    """Achado Critical da revisao final: a deteccao de nome duplicado cobria
+    metade do problema. Dois modulos que declarem cada um a SUA base -- e
+    declarar a base e o que o exemplo da spec 4.3 mostra -- recebiam nomes
+    diferentes nos MESMOS enderecos de RAM, sem erro. A ROM montava, rodava,
+    e as variaveis dos dois modulos se corrompiam mutuamente: e exatamente o
+    modo de falha que o BSS inteiro existe para eliminar.
+    """
+    with pytest.raises(MontagemError) as exc:
+        extrair(linhas(
+            "    BSS 0C000h", "A1: DS 4", "    ENDBSS",
+            "    BSS 0C000h", "B1: DS 4", "    ENDBSS",
+        ))
+    msg = str(exc.value)
+    assert "sobrep" in msg.lower()
+    assert "A1" in msg and "B1" in msg
+    assert "t.asm:2" in msg      # a faixa que ja estava alocada
+    assert "t.asm:5" in msg      # a faixa nova, onde o erro e citado
+
+
+def test_sobreposicao_parcial_de_faixas_tambem_e_erro():
+    """Nao basta detectar bases iguais: uma base declarada NO MEIO de uma
+    faixa ja alocada corrompe do mesmo jeito, e com nomes que nunca se
+    repetem a checagem de duplicata nao ve nada.
+    """
+    with pytest.raises(MontagemError) as exc:
+        extrair(linhas(
+            "    BSS 0C000h", "BUFFER: DS 16", "    ENDBSS",
+            "    BSS 0C008h", "OUTRO: DS 2", "    ENDBSS",
+        ))
+    assert "sobrep" in str(exc.value).lower()
+    assert "BUFFER" in str(exc.value)
+
+
+def test_base_declarada_depois_da_faixa_anterior_continua_valida():
+    """A recusa e de SOBREPOSICAO, nao de redeclarar base: um modulo que
+    escolhe uma regiao propria de RAM, sem encostar na do outro, e uso
+    legitimo e tem que continuar montando.
+    """
+    _, mapa = extrair(linhas(
+        "    BSS 0C000h", "A: DS 4", "    ENDBSS",
+        "    BSS 0D000h", "B: DS 4", "    ENDBSS",
+    ))
+    assert enderecos(mapa) == {"A": 0xC000, "B": 0xD000}
+
+
+def test_simbolo_carrega_arquivo_e_linha_da_declaracao():
+    """Procedencia real, para que o EQU sintetico gerado a partir daqui
+    (msxasm/cli.py) aponte para a linha que a pessoa escreveu, e nao para
+    '<bss>:N'.
+    """
+    _, mapa = extrair(linhas(
+        "    BSS 0C000h",
+        "MUS_PTR: DS 2",
+        "    ENDBSS",
+    ))
+    assert mapa["MUS_PTR"].arquivo == "t.asm"
+    assert mapa["MUS_PTR"].numero == 2
+    assert mapa["MUS_PTR"].tamanho == 2
+    assert mapa["MUS_PTR"].origem == "t.asm:2"
+
+
+def test_base_em_grafia_0x_continua_aceita_pela_gramatica_unificada():
+    """A gramatica numerica passou a morar em msxasm.numero, compartilhada
+    com mapper.py e com a CLI. As tres formas que o BSS ja aceitava
+    (0C000h, 0xC000, decimal) continuam valendo.
+    """
+    _, mapa = extrair(linhas("    BSS 0xC000", "V: DS 1", "    ENDBSS"))
+    assert enderecos(mapa) == {"V": 0xC000}
