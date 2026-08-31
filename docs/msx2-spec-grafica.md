@@ -1,5 +1,7 @@
 # Spec Gráfica — Projeto MSX2
 
+**Idiomas:** [Português](msx2-spec-grafica.md) · [English](msx2-graphics-spec.en.md) · [Español](msx2-spec-grafica.es.md)
+
 Documento de decisões de arquitetura gráfica. Alvo: MSX2 (V9938), SCREEN 5.
 Status: decisões fechadas em conversa, pendente de validação contra o código existente.
 

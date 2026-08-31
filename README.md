@@ -1,11 +1,17 @@
 # msxAIbuilder
 
+**Idiomas:** [Português](README.md) · [English](README.en.md) · [Español](README.es.md)
+
 Construtor de ROMs para MSX e MSX2: um assembler Z80 em Python, uma camada de
 conversao de assets e um runtime modular em assembly, para escrever jogos de
 cartucho.
 
-> **Estado: em design.** Nada foi implementado ainda. O desenho completo esta em
-> [`docs/superpowers/specs/2026-08-31-msxaibuilder-design.md`](docs/superpowers/specs/2026-08-31-msxaibuilder-design.md).
+> **Estado: o assembler existe e funciona.** 160 testes, e a ROM do Pong AI v24
+> continua sendo produzida byte a byte. Falta a camada de assets, o runtime Z80
+> compartilhado e o port do Pong.
+>
+> Referencia do assembler: [`docs/referencia.md`](docs/referencia.md).
+> Desenho completo: [`docs/superpowers/specs/2026-08-31-msxaibuilder-design.md`](docs/superpowers/specs/2026-08-31-msxaibuilder-design.md).
 
 ## De onde isso vem
 
@@ -54,7 +60,7 @@ p.build("game.asm")
 |---|---|
 | `msxasm` | Assembler Z80. `INCLUDE`, macros, `BSS` com alocacao de RAM, bancos de MegaROM. Nao sabe o que e um sprite. |
 | `msxbuild` | Conversao de assets, montagem do projeto, runtime `.asm`. Nao sabe codificar Z80. |
-| `games/` | Os jogos. `pong/` e a porta de entrada e o teste de regressao. |
+| `games/` | Os cartuchos. [`example/`](games/example/) monta e roda hoje; `pong/` aguarda o port. |
 
 ## MegaROM
 
@@ -81,6 +87,20 @@ projeto MSX2: **o orcamento de ciclos do blitter nao e mensuravel em emulador.**
 O WebMSX estima a duracao dos comandos e nao modela a disputa por slots de
 acesso a VRAM — exatamente a variavel que decide quantos objetos cabem em tela.
 Esse numero precisa de hardware real.
+
+## Comecando
+
+```sh
+git clone --recurse-submodules https://github.com/alexmoncks/msxAIbuilder.git
+cd msxAIbuilder
+python3 -m venv .venv && .venv/bin/pip install pytest
+
+./games/example/build.sh      # -> games/example/build/example.rom
+```
+
+O exemplo e um cartucho MSX de 16 KB que monta, com cabecalho valido e vetor de
+entrada correto. Ele existe para mostrar `INCLUDE`, `MACRO`, `BSS` e labels
+locais `@@` num programa que cabe na cabeca de uma vez.
 
 ## Testes
 
