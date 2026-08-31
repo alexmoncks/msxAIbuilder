@@ -62,6 +62,16 @@ p.build("game.asm")
 | `msxbuild` | Conversao de assets, montagem do projeto, runtime `.asm`. Nao sabe codificar Z80. |
 | `games/` | Os cartuchos. [`example/`](games/example/) monta e roda hoje; `pong/` aguarda o port. |
 | [`roms/`](roms/) | As ROMs jogaveis. Hoje: o Pong AI v24, 16 KB, MSX2. |
+| [`skills/`](skills/) | Conhecimento de hardware MSX empacotado como skill de agente. |
+
+## Documentacao
+
+| Documento | O que cobre |
+|---|---|
+| [Referencia do msxasm](docs/referencia.md) | Sintaxe do montador: CLI, diretivas, INCLUDE, macros, BSS, MegaROM |
+| [Manual de desenvolvimento MSX](docs/manual.md) | Hardware: V9938, sprites, PSG, YM2413, armadilhas, pipeline de musica |
+| [Spec grafica MSX2](docs/msx2-spec-grafica.md) | Decisoes de arquitetura para composite por blitter |
+| [skills/writing-msx-roms](skills/) | O mesmo hardware como referencia rapida, instalavel em agentes |
 
 ## MegaROM
 
