@@ -107,3 +107,39 @@ def test_erro_dentro_de_include_aponta_o_modulo(tmp_path):
     assert r.returncode == 1
     assert "rt.asm:2" in r.stderr, r.stderr
     assert "SUMIDO" in r.stderr
+
+
+def test_mnemonico_desconhecido_dentro_de_include_aponta_o_modulo(tmp_path):
+    """Mesma garantia do teste de simbolo inexistente dentro de INCLUDE, mas
+    para o caminho de codificacao de instrucao (mnemonico desconhecido). A
+    correcao de procedencia da Tarefa 4 originalmente so cobria _eval; este
+    teste prova que o helper _origem() tambem cobre este segundo ponto de
+    erro em assemble().
+    """
+    (tmp_path / "vdp.asm").write_text("; cabecalho\n    fooble a,b\n")
+    principal = tmp_path / "jogo.asm"
+    principal.write_text('    org 4000h\n    INCLUDE "vdp.asm"\n')
+
+    r = rodar(str(principal), "-o", str(tmp_path / "j.rom"))
+
+    assert r.returncode == 1
+    assert "vdp.asm:2" in r.stderr, r.stderr
+    assert "jogo.asm:2" not in r.stderr, r.stderr
+    assert "fooble" in r.stderr.lower()
+    assert not (tmp_path / "j.rom").exists(), "nao deve escrever ROM em caso de erro"
+
+
+def test_diretiva_malformada_dentro_de_include_aponta_o_modulo(tmp_path):
+    """Mesma garantia, para o terceiro ponto de erro em assemble() (diretiva
+    malformada, ex.: DB sem operando).
+    """
+    (tmp_path / "sprite.asm").write_text("; cabecalho\n    db\n")
+    principal = tmp_path / "jogo.asm"
+    principal.write_text('    org 4000h\n    INCLUDE "sprite.asm"\n')
+
+    r = rodar(str(principal), "-o", str(tmp_path / "j.rom"))
+
+    assert r.returncode == 1
+    assert "sprite.asm:2" in r.stderr, r.stderr
+    assert "jogo.asm:2" not in r.stderr, r.stderr
+    assert not (tmp_path / "j.rom").exists(), "nao deve escrever ROM em caso de erro"

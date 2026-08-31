@@ -112,11 +112,12 @@ class Z80Assembler:
                         # o repr do erro original na mensagem -- rastro do
                         # que de fato aconteceu, para nao confundir engano de
                         # sintaxe do usuario com bug de implementacao.
+                        arquivo, linha = self._origem()
                         raise MontagemError(
                             f"diretiva {d.group(1).upper()} mal formada em "
                             f"{stripped!r}: {e!r}",
-                            linha=self.linha_atual,
-                            arquivo=str(self.arquivo_base) if self.arquivo_base else None,
+                            linha=linha,
+                            arquivo=arquivo,
                         ) from e
                     i += 1
                     continue
@@ -140,10 +141,11 @@ class Z80Assembler:
                         # com buracos silenciosos; virava SystemExit sem
                         # arquivo nem linha. Agora sai como qualquer outra
                         # falha de montagem: MontagemError com arquivo:linha.
+                        arquivo, linha = self._origem()
                         raise MontagemError(
                             str(e),
-                            linha=self.linha_atual,
-                            arquivo=str(self.arquivo_base) if self.arquivo_base else None,
+                            linha=linha,
+                            arquivo=arquivo,
                         ) from e
                     self.current_address += self._guess_size(stripped)
                 i += 1
@@ -168,6 +170,36 @@ class Z80Assembler:
 
     def _is_valid_label(self, s: str) -> bool:
         return bool(re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', s))
+
+    def _origem(self) -> tuple:
+        """Mapeia linha_atual (indice no fonte achatado, apos INCLUDE) de
+        volta para (arquivo, numero) reais.
+
+        Depois do achatamento de INCLUDE (Tarefa 4), linha_atual indexa a
+        lista achatada, nao o arquivo original -- reportar arquivo_base
+        direto faria um erro num modulo do runtime (vdp.asm, sprite.asm...)
+        apontar para o arquivo que o incluiu, nao para o modulo onde o erro
+        de fato esta. Usa linhas_fonte quando ela existe (populada pela CLI
+        via msxasm.include.expandir) para achar a Linha original e devolver
+        seu arquivo/numero reais.
+
+        Ponto unico: os tres locais de assemble() que levantam MontagemError
+        (mnemonico desconhecido, diretiva malformada, expressao que nao
+        avalia) chamam este helper em vez de montar arquivo/linha cada um
+        do seu jeito -- um lugar so para acertar, e um quarto ponto de erro
+        que alguem adicionar depois nao tem como esquecer o mapeamento.
+
+        Cai em (arquivo_base, linha_atual) quando linhas_fonte nao esta
+        setado -- uso direto de Z80Assembler().assemble() sem passar pela
+        CLI/expandir, como os testes de tests/test_expressoes.py.
+        """
+        if self.linhas_fonte and self.linha_atual:
+            idx = self.linha_atual - 1
+            if 0 <= idx < len(self.linhas_fonte):
+                origem = self.linhas_fonte[idx]
+                return origem.arquivo, origem.numero
+        return (str(self.arquivo_base) if self.arquivo_base else None,
+                self.linha_atual)
 
     def _eval(self, expr: str) -> int:
         if not expr:
@@ -200,22 +232,12 @@ class Z80Assembler:
             # significa que o simbolo nao existe -- e devolver 0 em silencio
             # produz uma ROM que monta e trava.
             if self.pass_no == self.max_passes:
-                # Depois do achatamento de INCLUDE (Tarefa 4), self.linha_atual
-                # indexa a lista achatada, nao o arquivo original -- por isso
-                # mapeamos de volta via linhas_fonte para reportar o
-                # arquivo/numero de onde a linha realmente veio (o modulo),
-                # em vez de um offset do fonte achatado.
-                origem = None
-                if self.linhas_fonte and self.linha_atual:
-                    idx = self.linha_atual - 1
-                    if 0 <= idx < len(self.linhas_fonte):
-                        origem = self.linhas_fonte[idx]
+                arquivo, linha = self._origem()
                 raise MontagemError(
                     f"expressao nao pode ser avaliada: {expr!r} "
                     f"(apos substituicao de simbolos: {e!r})",
-                    linha=origem.numero if origem else self.linha_atual,
-                    arquivo=origem.arquivo if origem else (
-                        str(self.arquivo_base) if self.arquivo_base else None),
+                    linha=linha,
+                    arquivo=arquivo,
                 )
             return 0
 
